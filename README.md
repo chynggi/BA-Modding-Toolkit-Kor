@@ -15,7 +15,7 @@
 > [!NOTE]
 > English Translations are available now. If you find any errors or have any suggestions, please feel free to submit an issue or pull request.
 
-[简体中文](README_zh-CN.md) | English
+[简体中文](README_zh-CN.md) | English | [한국어](README_ko-KR.md)
 
 A toolkit based on UnityPy for automating the creation and updating of Blue Archive/ブルーアーカイブ mods.
 
@@ -210,6 +210,7 @@ BA-Modding-Toolkit/
 ├── LICENSE          # Project license file
 ├── docs/            # Project documentation folder
 │ └── help/              # Images in help documentation
+├── README_ko-KR.md  # Project documentation (Korean)
 ├── README_zh-CN.md  # Project documentation (Chinese)
 └── README.md        # Project documentation (this file)
 ```
