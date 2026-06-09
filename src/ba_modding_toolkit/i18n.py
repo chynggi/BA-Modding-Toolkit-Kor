@@ -50,9 +50,11 @@ def get_default_language() -> str:
         return env_lang
 
     system_lang = get_system_language()
-    # 如果系统语言是中文，使用zh-CN，否则使用en-US
+    # If system language is Chinese, use zh-CN; if Korean, use ko-KR; otherwise use en-US
     if system_lang and (system_lang.startswith("zh-")):
         return "zh-CN"
+    elif system_lang and (system_lang.startswith("ko-")):
+        return "ko-KR"
     else:
         return "en-US"
 
@@ -84,6 +86,8 @@ class I18n:
 
         if self.lang.startswith("zh-"):
             fallback_code = "zh-CN"
+        elif self.lang.startswith("ko-"):
+            fallback_code = "ko-KR"
         else:
             fallback_code = "en-US"
 
