@@ -3,6 +3,8 @@
 import tkinter as tk
 import ttkbootstrap as tb
 import tkinter.messagebox as messagebox
+import urllib.request
+import webbrowser
 from ttkbootstrap.widgets.scrolled import ScrolledFrame
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -38,11 +40,9 @@ class SettingsDialog(tb.Toplevel):
     def _setup_window(self):
         """设置窗口基本属性"""
         self.title(t("ui.settings.title"))
-        self.geometry("600x700")
+        self.geometry("700x888")
         # 设置窗口图标
-        icon_path = self.app.root_path / "assets" / "eligma.ico"
-        if icon_path.exists():
-            self.iconbitmap(icon_path)
+        self.app.setup_icon(self)
 
         self.transient(self.master)
 
@@ -101,6 +101,14 @@ class SettingsDialog(tb.Toplevel):
 
         SettingRow.create_button_row(
             section,
+            label=t("ui.label.github"),
+            button_text=t("action.open"),
+            command=lambda: webbrowser.open("https://github.com/Agent-0808/BA-Modding-Toolkit"),
+            bootstyle="info"
+        )
+
+        SettingRow.create_button_row(
+            section,
             label=t("ui.label.environment"),
             button_text=t("action.print"),
             command=self.print_environment_info,
@@ -108,8 +116,8 @@ class SettingsDialog(tb.Toplevel):
         )
 
     def _init_global_options(self):
-        """初始化全局选项"""
-        section = self._create_section(t("ui.settings.group_global"))
+        """初始化保存选项"""
+        section = self._create_section(t("ui.settings.group_save"))
 
         SettingRow.create_radiobutton_row(
             section,
@@ -140,6 +148,13 @@ class SettingsDialog(tb.Toplevel):
             text_var=self.app.compression_method_var,
             values=["lzma", "lz4", "original", "none"],
             tooltip=t("option.compression_method_info")
+        )
+
+        SettingRow.create_switch(
+            section,
+            label=t("option.skip_unchanged"),
+            variable=self.app.skip_unchanged_var,
+            tooltip=t("option.skip_unchanged_info")
         )
 
     def _init_asset_options(self):
@@ -185,7 +200,8 @@ class SettingsDialog(tb.Toplevel):
             path_var=self.app.spine_converter_path_var,
             select_cmd=self.select_spine_converter_path,
             tooltip=t("option.skel_converter_path_info"),
-            download_guide_cmd=self.app.show_spine_converter_download_guide
+            download_guide_cmd=self.app.show_spine_converter_download_guide,
+            status_check=lambda: Path(self.app.spine_converter_path_var.get()).is_file()
         )
 
         SettingRow.create_switch(
@@ -215,7 +231,22 @@ class SettingsDialog(tb.Toplevel):
             path_var=self.app.spine_viewer_path_var,
             select_cmd=self.select_spine_viewer_path,
             tooltip=t("option.spine_viewer_path_info"),
-            download_guide_cmd=self.app.show_spine_viewer_download_guide
+            download_guide_cmd=self.app.show_spine_viewer_download_guide,
+            status_check=lambda: Path(self.app.spine_viewer_path_var.get()).is_file()
+        )
+
+        tb.Separator(section).pack(fill=tk.X, padx=5, pady=5)
+
+        # 角色ID映射表
+        SettingRow.create_path_selector(
+            section,
+            label=t("option.character_id_map"),
+            path_var=self.app.bacii_map_path_var,
+            select_cmd=self.select_character_map_path,
+            open_cmd=None,
+            tooltip=t("option.character_id_map_info"),
+            download_guide_cmd=self.download_BACII_map,
+            status_check=lambda: Path(self.app.bacii_map_path_var.get()).is_file()
         )
 
     def _init_footer_buttons(self):
@@ -291,6 +322,41 @@ class SettingsDialog(tb.Toplevel):
             ),
             log=self.app.logger.log
         )
+
+    def select_character_map_path(self):
+        """选择角色ID映射表路径"""
+        select_file(
+            title=t("ui.dialog.select", type=t("option.character_id_map")),
+            file_types=[FileType.CSV, FileType.ALL],
+            callback=lambda path: (
+                self.app.bacii_map_path_var.set(str(path)),
+                self.app.logger.log(t("log.spine.character_map_set", path=path))
+            ),
+            log=self.app.logger.log
+        )
+
+    def download_BACII_map(self):
+        """下载角色ID映射表"""
+        url = "https://agent-0808.github.io/BA-characters-internal-id/data/students_data.csv"
+        # 下载到 exe 同级目录下的 Addons 子目录
+        save_path = self.app.exe_dir / "Addons" / "BA-Characters-Internal-ID.csv"
+
+        if not messagebox.askyesno(
+            t("common.3rd_party"),
+            t("message.download_confirm", url=url, path=save_path),
+            parent=self
+        ):
+            return
+
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(url, save_path)
+            self.app.bacii_map_path_var.set(str(save_path))
+            self.app.logger.log(t("log.file.downloaded", path=save_path))
+            messagebox.showinfo(t("common.success"), t("message.save_success"), parent=self)
+        except Exception as e:
+            self.app.logger.log(t("log.error_detail", error=e))
+            messagebox.showerror(t("common.error"), t("message.save_error", error=e), parent=self)
 
     def print_environment_info(self):
         """打印环境信息"""

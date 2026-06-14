@@ -19,12 +19,12 @@ from .windows import SettingsDialog, FileListWindow
 from .base_tab import TabFrame
 from .tabs import *
 
-class App(tk.Frame, ConfigMixin):
+class App(tb.Frame, ConfigMixin):
     def __init__(self, master: tk.Tk):
         super().__init__(master)
         self.master: tk.Tk = master
         self.setup_main_window()
-        self.config_manager = ConfigManager("config.toml")
+        self.config_manager = ConfigManager(self.exe_dir / "config.toml")
         self.init_shared_variables()
         # 在创建UI组件前加载配置，确保语言设置正确
         self.load_config_on_startup()  # 启动时加载配置
@@ -33,24 +33,32 @@ class App(tk.Frame, ConfigMixin):
 
     def setup_main_window(self):
         self.master.title(t("ui.app_title"))
-        self.master.geometry("600x789")
-        
-        # 设置 root_path
-        if hasattr(sys, 'frozen'):
-            # 打包环境：使用 exe 同级目录
-            # 根据 build.yml 配置，资源文件被打包到 ba_modding_toolkit 子目录
+        self.master.geometry("700x888")
+
+        # 设置路径
+        if "__compiled__" in globals() and hasattr(__compiled__, "containing_dir"):
+            # 打包环境（nuitka onefile）
+            # __compiled__.containing_dir 为原始 exe 所在目录
+            self.exe_dir = Path(__compiled__.containing_dir).resolve()
+            # root_path: nuitka 解压的资源目录（temp 目录下）
             self.root_path = Path(sys.executable).parent / "ba_modding_toolkit"
         else:
-            # 开发环境：src/ba_modding_toolkit/gui/app.py -> src/ba_modding_toolkit/
+            # 开发环境
+            # exe_dir: 项目根目录 BA-Modding-Toolkit/
+            self.exe_dir = Path(__file__).parents[3]
+            # root_path：src/ba_modding_toolkit/
             self.root_path = Path(__file__).parents[1]
 
         # 设置窗口图标
+        print(f"exe_dir: {self.exe_dir}")
         print(f"root_path: {self.root_path}")
+        self.setup_icon(self.master)
+
+    def setup_icon(self, window: tk.Toplevel):
+        """设置窗口图标"""
         icon_path = self.root_path / "assets" / "eligma.ico"
-        print(f"icon_path: {icon_path}")
         if icon_path.exists():
-            print(f"Setting icon to {icon_path}")
-            self.master.iconbitmap(icon_path)
+            window.iconbitmap(icon_path)
 
     def init_shared_variables(self):
         """初始化所有配置变量 - 通过 Annotated 类型提示自动处理"""
@@ -282,6 +290,17 @@ class App(tk.Frame, ConfigMixin):
     def open_output_dir_in_explorer(self):
         open_directory(self.output_dir_var.get(), self.logger.log, create_if_not_exist=True)
 
+    # 输出子目录常量
+    OUTPUT_SUBDIR_BUNDLES = "bundles"
+    OUTPUT_SUBDIR_EXTRACT = "extract"
+    OUTPUT_SUBDIR_PREVIEW = "preview"
+
+    def get_output_subdir(self, subdir: str) -> Path:
+        """获取输出目录下的子目录路径，自动创建"""
+        path = Path(self.output_dir_var.get()) / subdir
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     
     def load_config_on_startup(self):
         """应用启动时自动加载配置"""
@@ -329,7 +348,7 @@ class App(tk.Frame, ConfigMixin):
         parent.pack_propagate(False)
         
         # 左侧侧边栏 - 使用Frame并设置bootstyle="dark"实现深色背景
-        self.sidebar_frame = tb.Frame(parent, bootstyle="dark", width=140)
+        self.sidebar_frame = tb.Frame(parent, bootstyle="dark", width=160)
         self.sidebar_frame.pack(side=tk.LEFT, fill=tk.Y)
         self.sidebar_frame.pack_propagate(False)  # 固定宽度
         

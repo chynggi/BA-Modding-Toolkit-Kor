@@ -44,12 +44,14 @@ class ConfigMixin:
     # AppSettings
     language_var: Annotated[tk.StringVar, ConfigMeta("AppSettings", "")]
     output_dir_var: Annotated[tk.StringVar, ConfigMeta("AppSettings", _get_default_output_dir)]
+    character_name_field_var: Annotated[tk.StringVar, ConfigMeta("AppSettings", "full_name")]
     
-    # GlobalOptions
-    extra_bytes_var: Annotated[tk.StringVar, ConfigMeta("GlobalOptions", "0x08080808")]
-    enable_crc_correction_var: Annotated[tk.StringVar, ConfigMeta("GlobalOptions", "auto")]
-    create_backup_var: Annotated[tk.BooleanVar, ConfigMeta("GlobalOptions", True)]
-    compression_method_var: Annotated[tk.StringVar, ConfigMeta("GlobalOptions", "lzma")]
+    # SaveOptions (原 GlobalOptions)
+    extra_bytes_var: Annotated[tk.StringVar, ConfigMeta("SaveOptions", "0x08080808")]
+    enable_crc_correction_var: Annotated[tk.StringVar, ConfigMeta("SaveOptions", "auto")]
+    create_backup_var: Annotated[tk.BooleanVar, ConfigMeta("SaveOptions", True)]
+    compression_method_var: Annotated[tk.StringVar, ConfigMeta("SaveOptions", "lzma")]
+    skip_unchanged_var: Annotated[tk.BooleanVar, ConfigMeta("SaveOptions", True)]
     
     # ResourceTypes
     replace_texture2d_var: Annotated[tk.BooleanVar, ConfigMeta("ResourceTypes", True)]
@@ -69,6 +71,9 @@ class ConfigMixin:
 
     # SpineViewer
     spine_viewer_path_var: Annotated[tk.StringVar, ConfigMeta("SpineViewer", "")]
+
+    # CharacterMap
+    bacii_map_path_var: Annotated[tk.StringVar, ConfigMeta("BACIIMap", "")]
 
     # Tabs
     enable_spine38_namefix_var: Annotated[tk.BooleanVar, ConfigMeta("Tabs", False)]
