@@ -49,6 +49,9 @@ CompressionType = Literal["lzma", "lz4", "original", "none"]
 # 匹配策略类型
 MatchStrategy = Literal['path_id', 'name_type', 'cont_name_type']
 
+# 资源类型名（ALL 表示全部支持类型）
+ReplaceAssetType = Literal["Texture2D", "TextAsset", "Mesh", "ALL"]
+
 KeyFunc = Callable[[Obj], AssetKey]
 
 # -------- 业务配置 DataClass ---------
@@ -62,8 +65,8 @@ class SaveOptions:
 
 
 @dataclass
-class SpineOptions:
-    """封装了Spine版本转换相关的选项。"""
+class SkelConvertOptions:
+    """封装了Spine版本转换相关的选项（依赖 SpineSkeletonDataConverter）"""
     enabled: bool = False
     converter_path: Path | None = None
     target_version: str | None = None
@@ -78,6 +81,53 @@ class SpineOptions:
             and self.target_version.count(".") == 2
         )
 
+@dataclass(frozen=True)
+class SkelVersionConflict:
+    """skel 版本与预设目标版本不兼容的冲突信息"""
+    name: str               # skel 资源名
+    source_version: str     # 来源 skel 检测到的版本
+    target_version: str     # 预设目标版本
+
+@dataclass
+class AnimCheckOptions:
+    """动画差异比对与校验配置（依赖 SpineViewerCLI）"""
+    enabled: bool = False
+    viewer_path: Path | None = None
+
+    def is_valid(self) -> bool:
+        """检查动画检测器是否就绪"""
+        return bool(
+            self.enabled
+            and self.viewer_path
+            and self.viewer_path.exists()
+        )
+
+# 动画差异映射：{skel名称: [缺失动画列表]}
+AnimDiffMap = dict[str, list[str]]
+
+class FilePair(NamedTuple):
+    """core 中处理产生的文件对，包含output和source"""
+
+    output: Path    # 输出文件路径
+    source: Path    # 源文件路径
+
+@dataclass
+class ModUpdateResult:
+    """process_mod_update 的返回结果"""
+    success: bool
+    message: str
+    file_pairs: list[FilePair]
+    anim_diffs: AnimDiffMap | None = None
+
+@dataclass
+class BatchUpdateResult:
+    """process_batch_mod_update 的返回结果"""
+    success_count: int
+    fail_count: int
+    failed_tasks: list[str]
+    file_pairs: list[FilePair]
+    anim_diffs: AnimDiffMap | None = None
+
 class PatchResult(NamedTuple):
     """封装资源修改操作的结果。"""
     applied_count: int              # 实际执行修改的数量
@@ -85,6 +135,7 @@ class PatchResult(NamedTuple):
     applied_logs: list[str]         # 修改成功的日志
     unmatched_keys: list[AssetKey]  # 未匹配的资源键
     matched_keys: list[AssetKey]    # 匹配成功的资源键（包括修改和跳过的）
+    anim_diffs: dict[str, list[str]] | None = None  # 动画差异字典 {skel名称: [缺失动画列表]}
     
     @property
     def matched_count(self) -> int:
@@ -95,12 +146,6 @@ class PatchResult(NamedTuple):
     def is_success(self) -> bool:
         """是否有资源匹配成功（无论是否实际修改）"""
         return self.matched_count > 0
-
-class FilePair(NamedTuple):
-    """core 中处理产生的文件对，包含output和source"""
-
-    output: Path    # 输出文件路径
-    source: Path    # 源文件路径
 
 class ParsedFilename(NamedTuple):
     """
@@ -131,6 +176,14 @@ class BundleFileInfo:
     trailing_content: bytes | None = None
     parsed_name: ParsedFilename | None = None
     crc_actual: int | None = None
+    # ADB 支持
+    local_cache_path: Path | None = None  # ADB 模式下的本地缓存路径
+    source: str = "local"                  # "local" | "adb"
+
+    @property
+    def effective_path(self) -> Path:
+        """获取实际用于文件操作的本地路径"""
+        return self.local_cache_path if self.local_cache_path is not None else self.path
 
 
 # 可替换的资源类型白名单

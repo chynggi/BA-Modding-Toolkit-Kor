@@ -24,8 +24,8 @@
 
 - 从网上下载的 mod，替换了游戏目录下的对应文件，进游戏却显示“不正常的用戶端”，无法登录？
 - 从网上下载了发布于很久以前的 mod，但文件名与最新的不同？即使替换后进入游戏，对应的角色图像没有变化/完全不显示/游戏卡死？
-- 想要自己制作一个 mod，替换角色立绘，但没有 Unity 相关知识？
-- 想要解包游戏资源，提取角色立绘或其他资源？
+- 想要自己制作一个 mod，替换角色立绘，但不懂如何操作？
+- 想要提取角色立绘或其他资源？
 
 BA Modding Toolkit 可以帮助您解决以上问题，完全傻瓜式操作，无需对bundle文件手动操作。
 
@@ -45,10 +45,12 @@ BA Modding Toolkit 可以帮助您解决以上问题，完全傻瓜式操作，�
 - **CRC 工具**：CRC 校验值计算与修正功能
 - **资源打包**：将一个文件夹内的资源打包进对应的 Bundle ，替换 Bundle 中的同名资源
 - **资源提取**：从 Bundle 文件中提取指定类型的资源到本地文件
-- **旧版/新版转换**：旧版格式（国际服旧版）与新版格式（日服与国际服新版）的互相转换
-- **批量处理旧版**：批量处理旧版→新版的转换任务
-
-- **文件列表**：用于查看和管理当前指定目录下的所有Bundle文件信息
+- **ADB 文件推送**：使用 ADB 命令将本地文件推送至 Android 设备上
+- **工具**
+  - 生成 Mod 报告：用于生成游戏目录下 Mod 文件的图文报告
+  - 修复不正常的用户端：用于修复 Mod 文件中包含的不正常的用户端文件
+  - 备份 Mod 文件：用于备份 Mod 文件到指定目录
+- **文件列表**：用于查看和管理当前指定目录下的所有 Bundle 文件信息
 
 ![How to update a mod with BAMT GUI](docs/help/gui-help-mod-update-zhcn.png)
 
@@ -58,6 +60,7 @@ BA Modding Toolkit 可以帮助您解决以上问题，完全傻瓜式操作，�
 
 > [!WARNING]
 > 以下的扩展功能都是独立的第三方程序，当下载并使用时请遵守其协议。
+> 
 > BA-Modding-Toolkit 仅通过 `subprocess` 方式通过命令行调用对应程序，不会包含、分发这些程序的任何代码或文件，也不负责其使用过程中可能出现的任何问题。
 
 ### Spine 骨骼转换工具
@@ -77,7 +80,37 @@ BA Modding Toolkit 可以帮助您解决以上问题，完全傻瓜式操作，�
 
 **[ww-rm/SpineViewer](https://github.com/ww-rm/SpineViewer)**
 
-该工具可以预览与渲染 Spine 的骨骼动画文件。您可以在设置界面配置 `SpineViewerCLI.exe` 程序的路径，并在“文件列表”窗口中右键预览指定的Bundle文件中的Spine动画。
+该工具可以解析与渲染 Spine 的 `.skel` 动画文件。您可以在设置界面配置 `SpineViewerCLI.exe` 程序的路径来供本程序调用。
+
+- 在“文件列表”窗口中右键预览
+- 在“资源提取”功能中，可选在解包之后渲染预览图。
+- 在“Mod 报告”功能中，可选在生成报告时渲染预览图。
+- 可用于检测 `.skel` 动画列表的区别，在“Mod 更新”与“资源打包”功能中使用。
+
+### ADB(Android Debug Bridge)
+
+**[Android Debug Bridge](https://developer.android.com/tools/releases/platform-tools)**
+
+该工具可以与 Android 设备进行通信。您可以在设置界面配置 `adb.exe` 程序的路径，便可使用与 Windows 上本地文件一样的方式直接读取、写入 Android 设备上的文件，无需再手动导出、导入 Android 设备中的文件。
+
+- 该功能需要您已连接 Android 设备，并且已授权该程序访问您的设备。
+- 设置 `adb.exe` 程序的路径后，在“设置”窗口内选择目标 Android 设备与对应的文件来源即可。
+
+## 子项目
+
+### BA-characters-internal-id
+
+**[Agent-0808/BA-characters-internal-id](https://github.com/Agent-0808/BA-characters-internal-id)**
+
+一个对照表，记录了游戏中角色的名称与对应的文件内部ID的对照关系（例如：`CH0288` → 内海 青叶）。
+
+- 在各个功能中，解析Bundle文件的文件名获得内部ID之后，可以根据该对照表显示角色实际名称。
+- 也用作生成 Mod 报告时，根据角色内部ID显示角色名称。
+
+> [!NOTE]
+> 从 Releases 下载的打包版本已在程序目录的 `Addons/` 子目录中附带了一份数据文件（`BA-Characters-Internal-ID.csv`），开箱即用；您也可以在设置界面手动下载托管的最新版本。
+>
+> 该数据文件基于 [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/legalcode) 协议授权（完整声明见程序目录 `Addons/BA-Characters-Internal-ID-LICENSE.txt`），数据整理自 [基沃托斯古书馆](https://kivo.wiki) 的文本数据，在本程序中仅用于显示角色名称等合理用途。
 
 ## 命令行接口 (CLI)
 
@@ -93,39 +126,23 @@ BA Modding Toolkit 可以帮助您解决以上问题，完全傻瓜式操作，�
 # 查看所有可用命令
 bamt-cli -h
 
+# 查看环境信息
+bamt-cli env
+
 # 查看特定命令的详细帮助和示例
 bamt-cli update -h
 bamt-cli batch-update -h
-bamt-cli merge -h
-bamt-cli split -h
-bamt-cli batch-legacy -h
 bamt-cli pack -h
 bamt-cli extract -h
 bamt-cli crc -h
-
-# 查看环境信息
-bamt-cli env
+bamt-cli report -h
+bamt-cli backup -h
 ```
 
 > [!NOTE]
 > 由于`Tap`库技术限制，打包后的二进制文件无法显示参数变量的注释信息。当使用源代码运行时，参数变量的注释信息会显示在帮助信息中。
 
 请查看 [CLI Usage](https://github.com/Agent-0808/BA-Modding-Toolkit/wiki/CLI-Usage-&-Arguments) 页面参考详细用法说明。
-
-## 技术细节
-
-### 经过测试的环境
-
-下表列出了经过测试的环境配置，供参考。
-
-| 操作系统 (OS)           | Python 版本 | UnityPy 版本 | Pillow 版本 | 状态  | 备注   |
-|:------------------- |:--------- |:---------- |:--------- |:--- | ---- |
-| Windows 10          | 3.12.4    | 1.23.0     | 12.0.0    | ✅   | 开发环境 |
-| Windows 10          | 3.11.x    | 1.23.0     | 12.0.0    | ✅   |  |
-| Windows 10          | 3.12.4    | 1.23.0     | 10.4.0    | ✅   |  |
-| Windows 10          | 3.13.7    | 1.23.0     | 11.3.0    | ✅   |  |
-| Windows 10          | 3.12.4    | 1.24.0     | 10.4.0    | ❌   |  |
-| Ubuntu 22.04 (WSL2) | 3.13.10   | 1.23.0     | 12.0.0    | ✅   |  |
 
 ## 开发
 
@@ -150,6 +167,19 @@ python -m ba_modding_toolkit
 
 `cli/main.py` 是一个命令行接口（CLI）版本的主程序，您可以参考其调用处理函数的方式。
 
+### 经过测试的环境
+
+下表列出了经过测试的环境配置，供参考。
+
+| 操作系统 (OS)           | Python 版本 | UnityPy 版本 | Pillow 版本 | 状态  | 备注   |
+|:------------------- |:--------- |:---------- |:--------- |:--- | ---- |
+| Windows 10          | 3.12.4    | 1.23.0     | 12.0.0    | ✅   | 开发环境 |
+| Windows 10          | 3.11.x    | 1.23.0     | 12.0.0    | ✅   |  |
+| Windows 10          | 3.12.4    | 1.23.0     | 10.4.0    | ✅   |  |
+| Windows 10          | 3.13.7    | 1.23.0     | 11.3.0    | ✅   |  |
+| Windows 10          | 3.12.4    | 1.24.0     | 10.4.0    | ❌   |  |
+| Ubuntu 22.04 (WSL2) | 3.13.10   | 1.23.0     | 12.0.0    | ✅   |  |
+
 ### 文件结构
 
 ```
@@ -163,10 +193,13 @@ BA-Modding-Toolkit/
 │ ├── core.py        # 核心处理逻辑
 │ ├── searching.py   # 搜索功能逻辑
 │ ├── bundle.py      # Bundle 类
+│ ├── spine.py       # Spine 相关工具
+│ ├── report.py      # 报告生成工具
 │ ├── naming.py      # 文件名处理逻辑
 │ ├── models.py      # 数据模型类
 │ ├── i18n.py        # 国际化功能相关
 │ ├── utils.py       # 工具类和辅助函数
+│ ├── adb/           # ADB 相关模块
 │ ├── cli/           # 命令行接口子程序
 │ │ ├── __main__.py     # CLI 主入口
 │ │ ├── main.py         # 命令行程序主流程
@@ -176,23 +209,27 @@ BA-Modding-Toolkit/
 │ │ ├── __init__.py
 │ │ ├── main.py         # GUI 程序主入口
 │ │ ├── app.py          # 主应用 App 类
-│ │ ├── base_tab.py     # TabFrame 基类
 │ │ ├── components.py   # UI 组件、主题、日志
 │ │ ├── configs.py      # 配置项定义
 │ │ ├── utils.py        # UI 相关工具函数
 │ │ ├── windows/        # 独立窗口
 │ │ │ ├── __init__.py
-│ │ │ ├── dialogs.py            # 设置页 
-│ │ │ └── file_list_window.py   # 文件列表窗口
+│ │ │ ├── adb_browser.py           # ADB 浏览器窗口
+│ │ │ ├── settings.py              # 设置页 
+│ │ │ ├── abnormal_check_dialog.py # 不正常的用户端检查对话框
+│ │ │ ├── report_dialog.py         # 报告工具对话框
+│ │ │ ├── backup_dialog.py         # 备份工具对话框
+│ │ │ └── file_list_window.py      # 文件列表窗口
 │ │ └── tabs/           # 功能标签页
 │ │   ├── __init__.py
+│ │   ├── base_tab.py              # TabFrame 基类
 │ │   ├── mod_update_tab.py        # Mod 更新标签页
 │ │   ├── batch_update_tab.py      # 批量更新标签页
 │ │   ├── crc_tool_tab.py          # CRC 工具标签页
 │ │   ├── asset_packer_tab.py      # 资源打包标签页
 │ │   ├── asset_extractor_tab.py   # 资源提取标签页
-│ │   ├── legacy_conversion_tab.py # 旧版/新版格式转换标签页
-│ │   └── batch_legacy_tab.py      # 批量旧版转新版标签页
+│ │   ├── adb_push_tab.py          # ADB 推送标签页
+│ │   └── tools_tab.py             # 工具标签页
 │ ├── assets/         # 资源文件
 │ └── locales/        # 语言文件
 ├── tests/            # Pytest 测试案例文件夹
@@ -237,8 +274,8 @@ BA-Modding-Toolkit/
 
 一些好用的相关仓库：
 
-- [BA-characters-internal-id](https://github.com/Agent-0808/BA-characters-internal-id) ：查询角色名称与内部文件ID之间的对应关系
 - [BA-AD](https://github.com/Deathemonic/BA-AD)：下载原版游戏资源
+- [AtlasToolkit](https://github.com/com55/AtlasToolkit)：提取、修改、重新打包 .atlas 文件
 
 ### 免责声明 / Disclaimer
 

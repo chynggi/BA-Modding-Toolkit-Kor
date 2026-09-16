@@ -3,6 +3,7 @@
 import tkinter as tk
 import ttkbootstrap as tb
 from ttkbootstrap.widgets.tooltip import ToolTip
+from ttkbootstrap.widgets.scrolled import ScrolledText
 from tkinterdnd2 import DND_FILES
 from pathlib import Path
 from typing import Callable, Any, TYPE_CHECKING
@@ -10,10 +11,20 @@ from typing import Callable, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from .app import App
 
-from .utils import select_file, select_directory, open_directory, build_filetypes
+from .utils import select_file, select_directory, open_directory, reveal_in_explorer, build_filetypes
 from ..i18n import t
 from ..naming import parse_filename
 from ..models import FileType
+
+# --- 路径选择组件共用的核心机制 ---
+def _auto_path_commands(
+    path_var: tk.StringVar,
+    title: str,
+    parent: tk.Widget,
+) -> tuple[Callable[[], None], Callable[[], None]]:
+    select_cmd = lambda: select_directory(path_var, title, parent=parent)
+    open_cmd = lambda: open_directory(path_var.get())
+    return select_cmd, open_cmd
 
 # --- 日志管理类 ---
 class Logger:
@@ -51,6 +62,41 @@ class Logger:
             self.log_widget.config(state=tk.DISABLED)
         
         self.master.after(0, _clear_log)
+
+# --- 日志区域构建 ---
+
+def create_log_area(parent: tk.Widget) -> ScrolledText:
+    """创建日志区域，返回带自动隐藏滚动条的 ScrolledText（.text 为内部 Text 组件）"""
+    # 创建外层容器（带标题的边框）
+    log_frame = tb.Labelframe(
+        parent,
+        text=t("ui.log_area"),
+        bootstyle="default",
+        padding=(5, 0)
+    )
+    log_frame.pack(fill=tk.BOTH, expand=True)
+
+    # 使用 ttkbootstrap 的 ScrolledText (带自动隐藏的滚动条)
+    st = ScrolledText(
+        log_frame,
+        padding=0,
+        height=8,
+        autohide=True,    # 自动隐藏滚动条
+        bootstyle="round" # 滚动条样式
+    )
+    st.pack(fill=tk.BOTH, expand=True)
+
+    # 通过操作内部的 Text 组件来修改颜色
+    st.text.configure(
+        font=Theme.LOG_FONT,
+        background=Theme.LOG_BG,
+        foreground=Theme.LOG_FG,
+        selectbackground=Theme.LOG_SELECTED, # 选中时的背景色
+        insertbackground=Theme.LOG_FG,  # 光标颜色
+        state=tk.DISABLED,              # 初始设为不可编辑
+        spacing1=2,                     # 段前间距（像素）
+    )
+    return st
 
 # --- 主题与颜色管理 ---
 
@@ -164,7 +210,7 @@ class UIComponents:
         return checkbutton
 
     @staticmethod
-    def create_path_entry(parent, title, textvariable, select_cmd, open_cmd=None, placeholder_text=None, open_button=True):
+    def create_path_entry(parent, title, textvariable, select_cmd=None, open_cmd=None, placeholder_text=None, open_button=True):
         """
         创建路径输入框组件
 
@@ -172,14 +218,19 @@ class UIComponents:
             parent: 父组件
             title: 标题（可选，用于向后兼容）
             textvariable: 文本变量
-            select_cmd: 选择按钮命令
-            open_cmd: 打开按钮命令（可选）
+            select_cmd: 选择按钮命令；为 None 时自动生成默认的本地目录选择命令（以 title 作为对话框标题）
+            open_cmd: 打开按钮命令（可选）；仅在 select_cmd 也为 None（即选择命令为自动生成）时自动生成默认的打开目录命令
             placeholder_text: 占位符文本（可选）
             open_button: 是否显示"开"按钮，默认为True
 
         Returns:
             创建的框架组件
         """
+        # 自动生成默认的选择/打开命令（适用于普通本地目录路径）
+        if select_cmd is None:
+            select_cmd, auto_open_cmd = _auto_path_commands(textvariable, title, parent)
+            if open_cmd is None:
+                open_cmd = auto_open_cmd
 
         frame = tb.Labelframe(parent, text=title, padding=8)
         frame.pack(fill=tk.X, pady=5)
@@ -198,13 +249,13 @@ class UIComponents:
 
     # 保留原函数作为向后兼容的包装器
     @staticmethod
-    def create_directory_path_entry(parent, title, textvariable, select_cmd, open_cmd, placeholder_text=None):
-        """创建目录路径输入框组件（向后兼容）"""
+    def create_directory_path_entry(parent, title, textvariable, select_cmd=None, open_cmd=None, placeholder_text=None):
+        """创建目录路径输入框组件（向后兼容）；select_cmd/open_cmd 为 None 时自动生成默认命令"""
         return UIComponents.create_path_entry(parent, title, textvariable, select_cmd, open_cmd, placeholder_text, open_button=True)
 
     @staticmethod
     def create_file_path_entry(parent, title, textvariable, select_cmd):
-        """创建文件路径输入框组件（向后兼容）"""
+        """创建文件路径输入框组件（向后兼容）；文件选择无默认命令，select_cmd 需手动提供"""
         return UIComponents.create_path_entry(parent, title, textvariable, select_cmd, None, None, open_button=False)
 
     @staticmethod
@@ -250,13 +301,13 @@ class UIComponents:
         return combobox
 
     @staticmethod
-    def create_tooltip_icon(parent, text: str) -> tb.Label:
+    def create_tooltip_icon(parent, text: str, label: str = "ⓘ") -> tb.Label:
         """
         创建一个带有'ⓘ'符号的Label,鼠标悬停时显示Tooltip
         """
         label = tb.Label(
             parent,
-            text="ⓘ",
+            text=label,
             style="info",
             cursor="question_arrow"
         )
@@ -269,6 +320,7 @@ class DropZone(tb.Labelframe):
     def __init__(
         self, parent,
         title: str, placeholder_text: str,
+        app: "App",
         on_files_selected: Callable[[list[Path] | Path], None] | None = None,
         file_types: list[FileType | str] = [FileType.BUNDLE, FileType.ALL],
         search_path_var=None,
@@ -280,7 +332,7 @@ class DropZone(tb.Labelframe):
     ):
         super().__init__(parent, text=title, padding=(15, 12), **kwargs)
         self.pack(fill=tk.X, pady=(0, 5))
-        
+
         self.placeholder_text = placeholder_text
         self._on_files_selected = on_files_selected
         self._clear_cmd = clear_cmd
@@ -290,6 +342,8 @@ class DropZone(tb.Labelframe):
         self._paths: list[Path] = []
         self._open_btn = None  # "打开"按钮引用
         self._clear_btn = None  # "清除"按钮引用
+        self._app = app  # App 引用（ADB 模式需要）
+        self._adb_remote_paths: list[str] = []  # ADB 模式下的远程路径
         
         # 内部存储：转换为 tkinter 需要的 tuple 格式
         self._tk_filetypes: list[tuple[str, str]] = build_filetypes(file_types)
@@ -389,7 +443,17 @@ class DropZone(tb.Labelframe):
             parsed = parse_filename(self._paths[0].name)
             res_types = [parse_filename(p.name).res_type or "base" for p in self._paths]
             type_str = ", ".join(sorted(set(res_types)))
-            ui_text = f"{parsed.core}\n({t('ui.drop_zone.contains', count=len(self._paths), types=type_str)})"
+
+            # 查找角色名（如果映射表可用）
+            field = self._app.character_name_field_var.get()
+            char_name = self._app.char_map.lookup(parsed.core, field) or ""
+
+            # 格式化显示文本（逐个拼接）
+            ui_text = parsed.core
+            if char_name:
+                ui_text += f"（{char_name}）"
+            ui_text += f"\n({t('ui.drop_zone.contains', count=len(self._paths), types=type_str)})"
+
             self.set_success(ui_text)
         else:
             self.set_success(self._paths[0].name)
@@ -419,12 +483,11 @@ class DropZone(tb.Labelframe):
             self._clear_cmd()
 
     def _handle_open_directory(self) -> None:
-        """打开选中文件所在的目录"""
+        """在文件管理器中定位选中的第一个文件"""
         if not self._paths:
             return
 
-        directory = self._paths[0].parent
-        open_directory(directory, log=self._logger.log if self._logger else None)
+        reveal_in_explorer(self._paths[0])
 
     def _update_btn_state(self) -> None:
         """更新"打开"和"清除"按钮的启用/禁用状态"""
@@ -458,10 +521,17 @@ class DropZone(tb.Labelframe):
 
     def _handle_browse(self) -> None:
         """内部处理浏览按钮，支持多文件选择"""
+        # ADB 模式
+        if self._is_adb_mode():
+            self._browse_adb()
+            return
+
+        # 本地模式
         if self._allow_folder:
             path = select_directory(
                 title=t("ui.dialog.select", type=self.cget("text")),
-                log=self._logger.log if self._logger else None
+                log=self._logger.log if self._logger else None,
+                parent=self
             )
             if path:
                 dir_path = Path(path)
@@ -476,6 +546,49 @@ class DropZone(tb.Labelframe):
                 callback=self._handle_browse_callback,
                 log=self._logger.log if self._logger else None
             )
+
+    def _is_adb_mode(self) -> bool:
+        """检查是否为 ADB 模式"""
+        if self._app is not None:
+            return self._app.is_adb_mode()
+        return False
+
+    def _browse_adb(self) -> None:
+        """ADB 模式下的浏览操作"""
+        if not self._app:
+            return
+        from .windows.adb_browser import ADBFileBrowser
+        adb_source = self._app.get_adb_file_source()
+        if not adb_source.is_available():
+            from tkinter import messagebox
+            messagebox.showerror(t("common.error"), t("message.adb.not_connected"))
+            return
+
+        browser = ADBFileBrowser(
+            self.winfo_toplevel(),
+            adb_source=adb_source,
+            multiple=self._allow_multiple,
+            log=self._logger.log if self._logger else None
+        )
+
+        if browser.selected_paths:
+            # 将远程路径缓存到本地
+            local_paths: list[Path] = []
+            self._adb_remote_paths = browser.selected_paths
+            for remote_path in browser.selected_paths:
+                try:
+                    local_path = adb_source.ensure_local(remote_path)
+                    local_paths.append(local_path)
+                except Exception as e:
+                    if self._logger:
+                        self._logger.log(t("log.adb.pull_failed", path=remote_path, error=e))
+            if local_paths:
+                self.set_files(local_paths[:1] if not self._allow_multiple else local_paths)
+
+    @property
+    def adb_remote_paths(self) -> list[str]:
+        """获取 ADB 模式下的远程路径列表"""
+        return self._adb_remote_paths
 
     def _handle_browse_callback(self, paths: list[Path]) -> None:
         """浏览选择后的回调处理"""
@@ -549,18 +662,19 @@ class SettingRow:
         on_disabled: Callable[[], None],
         on_enabled: Callable[[], None],
         parent: tk.Widget,
-        on_click_disabled: Callable[[tk.Widget], None]
+        on_click_disabled: Callable[[tk.Widget], None] | None = None
     ) -> None:
         """设置依赖管理：当依赖无效时禁用控件，点击时显示下载引导"""
         def update_status():
             # 检查控件是否仍然存在（对话框关闭后 widget 可能已销毁）
             if not widget.winfo_exists():
                 return
-            
+
             available = app.check_dependency(depends_on)
             if not available:
                 on_disabled()
-                widget.bind('<Button-1>', lambda e: on_click_disabled(parent))
+                if on_click_disabled:
+                    widget.bind('<Button-1>', lambda e: on_click_disabled(parent))
             else:
                 on_enabled()
                 widget.unbind('<Button-1>')
@@ -613,37 +727,56 @@ class SettingRow:
         parent: tk.Widget,
         label: str,
         path_var: tk.StringVar,
-        select_cmd: Callable[[], None],
+        select_cmd: Callable[[], None] | None = None,
         open_cmd: Callable[[], None] | None = None,
         tooltip: str | None = None,
-        download_guide_cmd: Callable[[], None] | None = None,
-        status_check: Callable[[], bool] | None = None
+        download_guide_cmd: Callable[[tk.Widget | None], None] | None = None,
+        status_check: Callable[[], bool] | None = None,
+        extra_button: tuple[str, Callable[[], None], str] | None = None,
     ) -> tb.Frame:
         """创建路径选择行
-        
+
         Args:
             parent: 父组件
             label: 标签文本
             path_var: 路径变量
-            select_cmd: 选择路径命令
-            open_cmd: 打开路径命令（可选）
+            select_cmd: 选择路径命令；为 None 时自动生成默认的本地目录选择命令（以 label 作为对话框标题）
+            open_cmd: 打开路径命令（可选）；仅在 select_cmd 也为 None（即选择命令为自动生成）时自动生成默认的打开目录命令
             tooltip: 提示文本（可选）
-            download_guide_cmd: 下载引导命令（可选），当路径不合法时显示下载按钮
+            download_guide_cmd: 下载引导命令（可选），接收顶层窗口作为参数
             status_check: 状态检查函数（可选），返回 True 显示绿色指示器
+            extra_button: 额外按钮 (text, command, bootstyle)（可选）
         """
         container = SettingRow.create_container(parent)
         refresh_indicator = SettingRow._add_label_area(container, label, tooltip, status_check)
+        if select_cmd is None:
+            select_cmd, auto_open_cmd = _auto_path_commands(path_var, label, parent)
+            if open_cmd is None:
+                open_cmd = auto_open_cmd
         
         # 右侧区域容器
         right_frame = tb.Frame(container)
         right_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(50, 0))
-        
+
+        # 额外按钮
+        if extra_button:
+            text, cmd, style = extra_button
+            UIComponents.create_button(
+                right_frame,
+                text,
+                cmd,
+                bootstyle=style,
+                style="compact"
+            ).pack(side=tk.RIGHT, padx=(5, 0))
+
         # 下载按钮（如果提供了下载引导命令）
         if download_guide_cmd:
+            # 获取顶层窗口作为 parent 传递给下载引导命令
+            toplevel = parent.winfo_toplevel()
             UIComponents.create_button(
                 right_frame,
                 t("action.download"),
-                download_guide_cmd,
+                lambda: download_guide_cmd(toplevel),
                 bootstyle="warning",
                 style="compact"
             ).pack(side=tk.RIGHT, padx=(5, 0))
@@ -738,19 +871,68 @@ class SettingRow:
         parent: tk.Widget,
         label: str,
         text_var: tk.StringVar,
-        values: list[str],
+        values: list[str] | list[tuple[str, str]],
         tooltip: str | None = None,
         width: int | None = None,
     ) -> tb.Combobox:
-        """创建下拉框行"""
+        """创建下拉框行
+
+        Args:
+            values: 选项列表。可以是纯字符串列表，或 (实际值, 显示值) 元组列表。
+                    使用元组时，combobox 显示本地化文本，但 text_var 存储原始值。
+        """
+        # 处理 values 格式：支持 (value, display) 元组
+        if values and isinstance(values[0], tuple):
+            actual_values = [v[0] for v in values]
+            display_values = [v[1] for v in values]
+            value_to_display = dict(values)
+            display_to_value = {d: v for v, d in values}
+        else:
+            actual_values = values
+            display_values = values
+            value_to_display = None
+            display_to_value = None
+
         if width is None:
-            width = max((len(str(v)) for v in values), default=0) + 2
+            width = max((len(str(v)) for v in display_values), default=0) + 2
+
         container = SettingRow.create_container(parent)
         SettingRow._add_label_area(container, label, tooltip)
-        
-        combobox = tb.Combobox(container, textvariable=text_var, values=values, width=width)
-        combobox.pack(side=tk.RIGHT, padx=(10, 0))
-        return combobox
+
+        # 如果有映射，需要创建一个临时变量来存储显示值
+        if value_to_display:
+            # 创建显示值变量
+            display_var = tk.StringVar()
+            # 初始化显示值
+            current_actual = text_var.get()
+            if current_actual in value_to_display:
+                display_var.set(value_to_display[current_actual])
+
+            combobox = tb.Combobox(container, textvariable=display_var, values=display_values, width=width)
+            combobox.pack(side=tk.RIGHT, padx=(10, 0))
+
+            # 当选择改变时，同步实际值
+            def _on_select(event):
+                selected_display = display_var.get()
+                if selected_display in display_to_value:
+                    text_var.set(display_to_value[selected_display])
+
+            combobox.bind("<<ComboboxSelected>>", _on_select)
+
+            # 当实际值改变时（如加载配置），同步显示值
+            def _sync_display(*args):
+                actual = text_var.get()
+                if actual in value_to_display:
+                    display_var.set(value_to_display[actual])
+
+            text_var.trace_add("write", _sync_display)
+
+            return combobox
+        else:
+            # 无映射，直接使用 text_var
+            combobox = tb.Combobox(container, textvariable=text_var, values=values, width=width)
+            combobox.pack(side=tk.RIGHT, padx=(10, 0))
+            return combobox
 
     @staticmethod
     def create_radiobutton_row(
@@ -1065,49 +1247,65 @@ class FileListbox:
         raw_paths = event.widget.tk.splitlist(event.data)
         suffixes = self.allowed_suffixes
         paths_to_add = []
-        
+
         for p_str in raw_paths:
             path = Path(p_str)
             if path.is_dir():
-                for suf in suffixes:
-                    paths_to_add.extend(sorted(path.glob(f'*{suf}')))
-            elif path.is_file() and path.suffix.lower() in suffixes:
+                if suffixes:
+                    for suf in suffixes:
+                        paths_to_add.extend(sorted(path.glob(f'*{suf}')))
+                else:
+                    # 空后缀集合：接受目录下所有文件
+                    paths_to_add.extend(sorted(p for p in path.iterdir() if p.is_file()))
+            elif path.is_file() and (not suffixes or path.suffix.lower() in suffixes):
                 paths_to_add.append(path)
-        
+
         if paths_to_add:
             self.add_files(paths_to_add)
-    
+
     def _browse_add_files(self):
         """浏览添加文件"""
-        ft = [(f"*{s}", f"*{s}") for s in sorted(self.allowed_suffixes)]
-        ft.append((t("file_type.all_files"), "*.*"))
+        if self.allowed_suffixes:
+            ft = [(f"*{s}", f"*{s}") for s in sorted(self.allowed_suffixes)]
+            ft.append((t("file_type.all_files"), "*.*"))
+        else:
+            ft = [(t("file_type.all_files"), "*.*")]
         select_file(
             title=t("action.add_files"),
             file_types=ft,
             multiple=True,
             callback=lambda paths: self.add_files(paths),
-            log=self.logger.log if self.logger else None
+            log=self.logger.log if self.logger else None,
+            parent=self
         )
-    
+
     def _browse_add_folder(self):
         """浏览添加文件夹"""
         folder = select_directory(
             title = t("action.add_folder"),
-            log = self.logger.log if self.logger else None
+            log = self.logger.log if self.logger else None,
+            parent = self
             )
 
         if folder:
             path = Path(folder)
             files: list[Path] = []
-            for suf in self.allowed_suffixes:
-                files.extend(sorted(path.glob(f'*{suf}')))
+            if self.allowed_suffixes:
+                for suf in self.allowed_suffixes:
+                    files.extend(sorted(path.glob(f'*{suf}')))
+            else:
+                # 空后缀集合：接受目录下所有文件
+                files.extend(sorted(p for p in path.iterdir() if p.is_file()))
             if files:
                 self.add_files(files)
                 if self.logger:
                     self.logger.log(t('log.file.added_count', count=len(files)))
             else:
                 if self.logger:
-                    self.logger.log(t('log.file.no_files_found_in_folder', type=', '.join(sorted(self.allowed_suffixes))))
+                    if self.allowed_suffixes:
+                        self.logger.log(t('log.file.no_files_found_in_folder', type=', '.join(sorted(self.allowed_suffixes))))
+                    else:
+                        self.logger.log(t('log.file.no_files_found_in_folder', type='*'))
     
     def _remove_selected(self):
         """移除选中的文件"""

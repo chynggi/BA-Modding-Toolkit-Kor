@@ -15,15 +15,18 @@ from ttkbootstrap.widgets.tableview import Tableview as TBTableview
 from ...i18n import t
 from ...utils import CRCUtils
 from ...naming import parse_filename, CharacterInternalIDMap, COMMON_MOD_PREFIXES
-from ...searching import list_bundle_files, search_prefix, get_search_dirs
+from ...searching import list_bundle_files, list_bundle_files_remote, search_prefix, search_prefix_remote, get_search_dirs
 from ...bundle import analyze_bundles
 from ...models import BundleFileInfo
 from ...core import render_spine_preview_from_bundle
 from ..components import Theme, UIComponents
-from ..utils import open_directory, select_directory
+from ..utils import reveal_in_explorer, select_directory
+from .base import StoppableDialog
+from .preview_window import PreviewWindow
 
 if TYPE_CHECKING:
     from ..app import App
+    from ...adb.file_source import ADBFileSource
 
 
 def _format_file_size(size: int) -> str:
@@ -44,7 +47,7 @@ def _format_hex(data: bytes | None) -> str:
 def _format_time(mtime: float) -> str:
     if mtime <= 0:
         return ""
-    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
 
 _UNSET = "—"
@@ -59,11 +62,12 @@ class ColumnId(Enum):
     modified_time = 4
     trailing_bytes = 5
     trailing_content = 6
-    core = 7
-    char_name = 8       # 角色名称（通过映射表从 core 转换）
-    res_type = 9
-    crc = 10
-    crc_actual = 11
+    category = 7        # 资源分类
+    core = 8
+    char_name = 9       # 角色名称（通过映射表从 core 转换）
+    res_type = 10
+    crc = 11
+    crc_actual = 12
 
 
 class ColumnDef(NamedTuple):
@@ -83,6 +87,7 @@ def _get_columns() -> list[ColumnDef]:
         ColumnDef(ColumnId.modified_time, t("ui.file_list.column.modified_time"), 100),
         ColumnDef(ColumnId.trailing_bytes, t("ui.file_list.column.trailing_bytes"), 80, default_visible=False),
         ColumnDef(ColumnId.trailing_content, t("ui.file_list.column.trailing_content"), 150, default_visible=False),
+        ColumnDef(ColumnId.category, t("ui.file_list.column.category"), 120, default_visible=False),
         ColumnDef(ColumnId.core, t("ui.file_list.column.core"), 150, default_visible=False),
         ColumnDef(ColumnId.char_name, t("ui.file_list.column.character"), 150, default_visible=False),
         ColumnDef(ColumnId.res_type, t("ui.file_list.column.res_type"), 80, default_visible=False),
@@ -105,7 +110,7 @@ def _get_analyzer_options() -> list[AnalyzerOption]:
 
 ANALYZER_TO_COLUMNS: dict[str, list[ColumnId]] = {
     "trailing": [ColumnId.trailing_bytes, ColumnId.trailing_content],
-    "naming": [ColumnId.core, ColumnId.char_name, ColumnId.res_type],
+    "naming": [ColumnId.category, ColumnId.core, ColumnId.char_name, ColumnId.res_type],
     "crc": [ColumnId.crc, ColumnId.crc_actual],
 }
 
@@ -231,7 +236,7 @@ class BatchSelectDialog(tb.Toplevel):
         return self._result
 
 
-class FileListWindow(tb.Toplevel):
+class FileListWindow(StoppableDialog):
     """文件列表独立窗口，展示搜索目录下所有 bundle 文件的信息"""
 
     def __init__(self, master: tk.Tk, app: "App"):
@@ -240,8 +245,7 @@ class FileListWindow(tb.Toplevel):
 
         self._all_items: list[BundleFileInfo] = []
         self._items_by_path: dict[str, BundleFileInfo] = {}
-        self._closed: bool = False
-        self._char_map = CharacterInternalIDMap()  # 角色ID映射表
+        self._scan_version: int = 0  # 扫描版本号，用于丢弃过期的扫描结果
 
         self.ctx_list: list[tuple[str, Callable[[], None]]] = [
             (t("action.analyze"), self._ctx_analyze),
@@ -249,22 +253,19 @@ class FileListWindow(tb.Toplevel):
             (t("action.copy_filename"), self._ctx_copy_filename),
             (t("action.check_crc"), self._ctx_check_crc),
             (t("action.render_preview"), self._ctx_render_preview),
+            (t("action.send_to_extractor"), self._ctx_send_to_extractor),
         ]
 
         self._setup_window()
-        self._load_character_mapping()
         self._create_toolbar()
         self._create_status_bar()
         self._create_tableview()
-
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.after(100, self._refresh)
 
     def _setup_window(self):
         self.title(t("ui.file_list.window_title"))
         self.geometry("1400x750")
-        self.transient(self.master)
         self.app.setup_icon(self)
 
     def _create_toolbar(self):
@@ -274,20 +275,22 @@ class FileListWindow(tb.Toplevel):
         row1 = tb.Frame(toolbar_container, padding=5)
         row1.pack(fill=tk.X)
 
-        self._dir_var = tk.StringVar(value=self.app.game_resource_dir_var.get())
+        self._dir_var = tk.StringVar(value=self.app.get_current_resource_dir())
 
-        dir_entry = tb.Entry(row1, textvariable=self._dir_var, width=50)
-        dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self._dir_entry = tb.Entry(row1, textvariable=self._dir_var, width=50)
+        self._dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
-        UIComponents.create_button(
+        self._select_btn = UIComponents.create_button(
             row1, t("action.select"),
             self._select_directory, bootstyle="primary", style="compact"
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        )
+        self._select_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        UIComponents.create_button(
+        self._refresh_btn = UIComponents.create_button(
             row1, t("action.refresh"),
             self._refresh, bootstyle="success", style="compact"
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        )
+        self._refresh_btn.pack(side=tk.LEFT, padx=(0, 5))
 
         row2 = tb.Frame(toolbar_container, padding=5)
         row2.pack(fill=tk.X)
@@ -325,7 +328,7 @@ class FileListWindow(tb.Toplevel):
         tb.Label(char_label_frame, text=t("option.character_name_field")).pack(side=tk.LEFT)
         UIComponents.create_tooltip_icon(char_label_frame, t("option.character_name_field_info")).pack(side=tk.LEFT, padx=(3, 0))
 
-        char_field_values = CharacterInternalIDMap.NAME_FIELDS
+        char_field_values = self.app.char_map.fields or CharacterInternalIDMap.NAME_FIELDS
         self._char_field_var = tk.StringVar(
             value=self.app.character_name_field_var.get() or char_field_values[0]
         )
@@ -335,6 +338,17 @@ class FileListWindow(tb.Toplevel):
         )
         char_field_combo.pack(side=tk.LEFT, padx=(0, 5))
         char_field_combo.bind("<<ComboboxSelected>>", self._on_character_field_changed)
+
+        # 绑定文件来源变化事件（使用 bind_all 让所有 widget 都能接收）
+        self.bind_all("<<FileSourceChanged>>", self._on_file_source_changed, add=True)
+
+    def _on_file_source_changed(self, event=None):
+        """文件来源变化时更新目录"""
+        # 检查窗口是否仍然存在，避免在窗口关闭后访问已销毁的 widget
+        if not self.winfo_exists():
+            return
+        self._dir_var.set(self.app.get_current_resource_dir())
+        self._refresh()
 
     def _create_tableview(self):
         columns = _get_columns()
@@ -365,37 +379,6 @@ class FileListWindow(tb.Toplevel):
         )
         self.table.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
 
-        # 替换内置滚动条为 ttkbootstrap 风格
-        if hasattr(self.table, 'ybar') and hasattr(self.table, 'hbar'):
-            ybar_master = self.table.ybar.master
-            hbar_master = self.table.hbar.master
-            
-            # 暂时解除所有布局
-            self.table.view.pack_forget()
-            self.table.ybar.pack_forget()
-            self.table.hbar.pack_forget()
-            
-            # 销毁旧滚动条
-            self.table.ybar.destroy()
-            self.table.hbar.destroy()
-            
-            # 创建新滚动条
-            self.table.ybar = tb.Scrollbar(
-                ybar_master, command=self.table.view.yview, orient=tk.VERTICAL,
-            )
-            self.table.hbar = tb.Scrollbar(
-                hbar_master, command=self.table.view.xview, orient=tk.HORIZONTAL,
-            )
-            
-            # 重新布局：hbar 在底部，ybar 在右侧，view 填满剩余空间
-            self.table.hbar.pack(fill=tk.X, side=tk.BOTTOM)
-            self.table.ybar.pack(fill=tk.Y, side=tk.RIGHT)
-            self.table.view.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
-            
-            # 配置滚动条联动
-            self.table.view.configure(yscrollcommand=self.table.ybar.set)
-            self.table.view.configure(xscrollcommand=self.table.hbar.set)
-
         # 默认隐藏 _path 列（索引 0）和非默认可见列
         self.table.get_column(index=0, visible=False).hide()
         for i, col in enumerate(columns):
@@ -415,6 +398,7 @@ class FileListWindow(tb.Toplevel):
         cell_menu.add_separator()
         for label, command in self.ctx_list:
             cell_menu.add_command(label=label, command=command)
+        cell_menu.add_command(label=t("action.cache_to_local"), command=self._ctx_cache_to_local)
 
         # 在表头右键菜单中添加批量选中入口
         # 存储当前右键点击的列索引
@@ -468,17 +452,11 @@ class FileListWindow(tb.Toplevel):
 
     # -------- 数据操作 --------
 
-    def _load_character_mapping(self):
-        """加载角色ID映射表 CSV"""
-        path = self.app.bacii_map_path_var.get().strip()
-        if path:
-            self._char_map.load(Path(path))
-
     def _lookup_character_name(self, core: str) -> str:
         """根据 core 值查找角色名称，未找到则回退为 core 本身"""
         if core == _UNSET:
             return core
-        return self._char_map.lookup(core, field=self.app.character_name_field_var.get()) or core
+        return self.app.char_map.lookup(core, field=self.app.character_name_field_var.get()) or core
 
     def _on_character_field_changed(self, event=None):
         """角色名称字段下拉框变化时的处理"""
@@ -497,9 +475,34 @@ class FileListWindow(tb.Toplevel):
                 row.values = row.values
 
     def _select_directory(self):
-        select_directory(self._dir_var, t("option.game_root_dir"), self.app.logger.log)
+        if self._is_adb_mode():
+            from .adb_browser import ADBFileBrowser
+            adb_source = self.app.get_adb_file_source()
+            browser = ADBFileBrowser(
+                self, adb_source,
+                title=t("ui.dialog.adb_browser_dir"),
+                directory_mode=True,
+                log=self.app.logger.log
+            )
+            if browser.selected_paths:
+                self._dir_var.set(browser.selected_paths[0])
+        else:
+            select_directory(self._dir_var, t("option.game_dir_windows_global"), self.app.logger.log, parent=self)
+
+    def _is_adb_mode(self) -> bool:
+        """当前是否为 ADB 模式"""
+        return self.app.is_adb_mode()
 
     def _refresh(self):
+        # 检查窗口是否仍然存在
+        if not self.winfo_exists():
+            return
+        if self._is_adb_mode():
+            self._refresh_adb()
+        else:
+            self._refresh_local()
+
+    def _refresh_local(self):
         dir_str = self._dir_var.get().strip()
         if not dir_str:
             messagebox.showwarning(t("common.warning"), t("ui.file_list.no_dirs_found"))
@@ -513,11 +516,37 @@ class FileListWindow(tb.Toplevel):
         self._status_label.config(text=t("ui.file_list.scanning"))
         self._progress["value"] = 0
         self.table.delete_rows()
-        self._load_character_mapping()
+        self._scan_version += 1
+        current_version = self._scan_version
 
         def _scan():
             items = list_bundle_files(base_dir)
-            if not self._closed:
+            if not self.should_stop() and self.winfo_exists() and self._scan_version == current_version:
+                self.after(0, lambda: self._on_scan_complete(items))
+
+        thread = threading.Thread(target=_scan, daemon=True)
+        thread.start()
+
+    def _refresh_adb(self):
+        """ADB 模式下的刷新：刷新索引并扫描远程文件"""
+        self._status_label.config(text=t("ui.file_list.scanning"))
+        self._progress["value"] = 0
+        self.table.delete_rows()
+        self._scan_version += 1
+        current_version = self._scan_version
+
+        adb_source = self.app.get_adb_file_source()
+
+        if not adb_source.is_available():
+            messagebox.showwarning(t("common.warning"), t("message.adb.not_connected"))
+            self._status_label.config(text=t("message.adb.not_connected"))
+            return
+
+        def _scan():
+            # 先刷新索引
+            adb_source.refresh_index(log=self.app.logger.log)
+            items = list_bundle_files_remote(adb_source, log=self.app.logger.log)
+            if not self.should_stop() and self.winfo_exists() and self._scan_version == current_version:
                 self.after(0, lambda: self._on_scan_complete(items))
 
         thread = threading.Thread(target=_scan, daemon=True)
@@ -538,20 +567,20 @@ class FileListWindow(tb.Toplevel):
         self._progress["value"] = 0
 
         def _on_progress(done: int, total: int, filename: str):
-            if self._closed:
+            if self.should_stop() or not self.winfo_exists():
                 return
             self.after(0, lambda: self._update_progress(done, total, filename))
 
         def _run():
             analyze_bundles(self._all_items, analyzer_names, progress_callback=_on_progress)
-            if not self._closed:
+            if not self.should_stop() and self.winfo_exists():
                 self.after(0, self._on_analyze_complete)
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
 
     def _update_progress(self, done: int, total: int, filename: str):
-        if self._closed:
+        if self.should_stop() or not self.winfo_exists():
             return
         if total > 0:
             self._progress["value"] = done / total * 100
@@ -567,6 +596,7 @@ class FileListWindow(tb.Toplevel):
             _format_hex(item.trailing_content) if item.trailing_content is not None else _UNSET
         )
         core_display = item.parsed_name.core if item.parsed_name else _UNSET
+        category_display = item.parsed_name.category if item.parsed_name and item.parsed_name.category else _UNSET
         character_display = self._lookup_character_name(core_display) if item.parsed_name else _UNSET
         res_type_display = item.parsed_name.res_type if item.parsed_name and item.parsed_name.res_type else _UNSET
         crc_display = (
@@ -579,23 +609,39 @@ class FileListWindow(tb.Toplevel):
         parent_dir = item.path.parent
         display_dir = parent_dir.parent if parent_dir.name in ["Windows", "Android"] else parent_dir
 
+        # 目录列添加平台标识
+        dir_name = display_dir.name
+        if item.source == "adb":
+            platform = "Android"
+        else:
+            platform = "Windows"
+        # 判断是 GameData 还是 Preload
+        path_str = str(item.path).replace("\\", "/")
+        if "Preload" in path_str:
+            dir_display = f"Preload({platform})"
+        elif "GameData" in path_str:
+            dir_display = f"GameData({platform})"
+        else:
+            dir_display = f"{dir_name}({platform})"
+
         return [
             str(item.path),           # 0: _path
             item.path.name,           # 1: filename
-            display_dir.name,         # 2: directory
+            dir_display,              # 2: directory
             _format_file_size(item.file_size),  # 3: file_size
             _format_time(item.modified_time),   # 4: modified_time
             trailing_display,         # 5: trailing_bytes
             trailing_content_display, # 6: trailing_content
-            core_display,             # 7: core
-            character_display,        # 8: character
-            res_type_display,         # 9: res_type
-            crc_display,              # 10: crc
-            crc_actual_display,       # 11: crc_actual
+            category_display,         # 7: category
+            core_display,             # 8: core
+            character_display,        # 9: character
+            res_type_display,         # 10: res_type
+            crc_display,              # 11: crc
+            crc_actual_display,       # 12: crc_actual
         ]
 
     def _on_scan_complete(self, items: list[BundleFileInfo]):
-        if self._closed:
+        if self.should_stop() or not self.winfo_exists():
             return
         self._progress["value"] = 0
         self._status_label.config(text=t("ui.file_list.scan_complete"))
@@ -611,7 +657,7 @@ class FileListWindow(tb.Toplevel):
         self.app.logger.log(t("ui.file_list.scan_complete"))
 
     def _on_analyze_complete(self):
-        if self._closed:
+        if self.should_stop() or not self.winfo_exists():
             return
         self._progress["value"] = 0
         self._status_label.config(text=t("ui.file_list.analyze_complete"))
@@ -631,9 +677,9 @@ class FileListWindow(tb.Toplevel):
     def _get_filters(self) -> dict[str, tuple[str, Callable[[BundleFileInfo], bool]]]:
         """获取所有过滤器，返回 True 表示保留"""
         return {
-            "has_trailing": (t("ui.file_list.filter.has_trailing"), lambda item: item.trailing_bytes > 0),
+            "has_trailing": (t("ui.file_list.filter.has_trailing"), lambda item: item.trailing_bytes is not None and item.trailing_bytes > 0),
             "crc_mismatch": (t("ui.file_list.filter.crc_mismatch"), lambda item: item.crc_actual is not None and item.parsed_name and item.crc_actual != int(item.parsed_name.crc or 0)),
-            "has_character": (t("ui.file_list.filter.has_character"), lambda item: item.parsed_name and self._char_map.lookup(item.parsed_name.core, field="full_name") is not None),
+            "has_character": (t("ui.file_list.filter.has_character"), lambda item: item.parsed_name and self.app.char_map.lookup(item.parsed_name.core, field="full_name") is not None),
             "common_mod": (t("ui.file_list.filter.common_mod"), lambda item: any(item.path.name.startswith(p) for p in COMMON_MOD_PREFIXES)),
         }
 
@@ -728,10 +774,60 @@ class FileListWindow(tb.Toplevel):
             if iid in self._items_by_path
         ]
 
+    def _ensure_items_local(self, items: list[BundleFileInfo]) -> list[BundleFileInfo]:
+        """对于 ADB 模式的文件，先缓存到本地再操作，返回更新后的 items 列表"""
+        if not self._is_adb_mode():
+            return items
+
+        adb_source = self.app.get_adb_file_source()
+        updated = []
+        for item in items:
+            if item.source == "adb" and item.local_cache_path is None:
+                local_path = adb_source.ensure_local(str(item.path))
+                item.local_cache_path = local_path
+            updated.append(item)
+        return updated
+
+    def _collect_prefix_group_files(self, selected: list[Path]) -> list[Path]:
+        """搜索选中文件同 prefix 的所有 bundle 文件（ADB 模式下自动缓存到本地）"""
+        if self._is_adb_mode():
+            adb_source = self.app.get_adb_file_source()
+            search_dirs = adb_source.get_search_dirs()
+        else:
+            search_dirs = get_search_dirs(Path(self.app.game_resource_dir_var.get()))
+
+        bundle_paths_set: set[Path] = set()
+        for file in selected:
+            if self._is_adb_mode():
+                # ADB 模式：远程搜索后拉取到本地
+                remote_candidates, _ = search_prefix_remote(file, search_dirs, adb_source, self.app.logger.log)
+                for remote_path in remote_candidates:
+                    try:
+                        local_path = adb_source.ensure_local(remote_path)
+                        bundle_paths_set.add(local_path)
+                    except RuntimeError:
+                        pass
+            else:
+                candidates, _ = search_prefix(file, search_dirs)
+                bundle_paths_set.update(candidates)
+        return list(bundle_paths_set)
+
     def _ctx_open_in_explorer(self):
         items = self._get_selected_items()
+        if self._is_adb_mode():
+            # ADB 模式下无法在资源管理器中打开，改为打开 ADB 浏览器
+            from .adb_browser import ADBFileBrowser
+            adb_source = self.app.get_adb_file_source()
+            ADBFileBrowser(self, adb_source, title=t("ui.dialog.adb_browser"), log=self.app.logger.log)
+            return
+        # 按所在目录聚合，每个目录只打开一次（选中该目录下第一个选中文件）
+        revealed_dirs: set[Path] = set()
         for item in items:
-            open_directory(item.path.parent, self.app.logger.log)
+            parent = item.path.parent
+            if parent in revealed_dirs:
+                continue
+            revealed_dirs.add(parent)
+            reveal_in_explorer(item.path)
 
     def _ctx_copy_filename(self):
         items = self._get_selected_items()
@@ -745,24 +841,27 @@ class FileListWindow(tb.Toplevel):
         if not items:
             return
 
+        # ADB 模式下先缓存文件
+        items = self._ensure_items_local(items)
+
         self._status_label.config(text=t("ui.file_list.analyzing"))
         self._progress["value"] = 0
 
         def _on_progress(done: int, total: int, filename: str):
-            if self._closed:
+            if self.should_stop() or not self.winfo_exists():
                 return
             self.after(0, lambda: self._update_progress(done, total, filename))
 
         def _run():
             analyze_bundles(items, ["trailing", "naming", "crc"], progress_callback=_on_progress)
-            if not self._closed:
+            if not self.should_stop() and self.winfo_exists():
                 self.after(0, self._ctx_analyze_complete)
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
 
     def _ctx_analyze_complete(self):
-        if self._closed:
+        if self.should_stop() or not self.winfo_exists():
             return
         self._progress["value"] = 0
         self._status_label.config(text=t("ui.file_list.analyze_complete"))
@@ -782,6 +881,9 @@ class FileListWindow(tb.Toplevel):
         if not items:
             return
 
+        # ADB 模式下先缓存文件
+        items = self._ensure_items_local(items)
+
         results = []
         for item in items:
             try:
@@ -789,7 +891,7 @@ class FileListWindow(tb.Toplevel):
                     item.parsed_name = parse_filename(item.path.name)
 
                 if item.crc_actual is None:
-                    item.crc_actual = CRCUtils.compute_crc32(item.path)
+                    item.crc_actual = CRCUtils.compute_crc32(item.effective_path)
 
                 row = self.table.get_row(iid=str(item.path))
                 if row:
@@ -820,6 +922,9 @@ class FileListWindow(tb.Toplevel):
         if not items:
             return
 
+        # ADB 模式下先缓存文件
+        items = self._ensure_items_local(items)
+
         # 检查 SpineViewerCLI 路径
         viewer_path_str = self.app.spine_viewer_path_var.get().strip()
         if not viewer_path_str:
@@ -841,49 +946,139 @@ class FileListWindow(tb.Toplevel):
         output_dir = self.app.get_output_subdir(self.app.OUTPUT_SUBDIR_PREVIEW)
 
         # 获取同组所有文件，支持只选中texture文件，自动寻找textassets的情况
-        selected = [item.path for item in items]
-        search_dirs = get_search_dirs(Path(self.app.game_resource_dir_var.get()))
+        selected = [item.effective_path for item in items]
 
         self._status_label.config(text=t("status.processing"))
         self._progress["value"] = 0
 
         def _run():
             # 在后台线程中搜索同组所有文件
-            bundle_paths_set: set[Path] = set()
-            for file in selected:
-                candidates, _ = search_prefix(file, search_dirs)
-                bundle_paths_set.update(candidates)
+            bundle_paths = self._collect_prefix_group_files(selected)
 
             # 渲染预览
-            success, message = render_spine_preview_from_bundle(
-                bundle_path=list(bundle_paths_set),
+            success, message, rendered_paths = render_spine_preview_from_bundle(
+                bundle_path=bundle_paths,
                 output_dir=output_dir,
                 viewer_path=viewer_path,
                 log=self.app.logger.log
             )
-            if not self._closed:
-                self.after(0, lambda: self._on_render_preview_complete(success, message))
+            if not self.should_stop() and self.winfo_exists():
+                self.after(0, lambda: self._on_render_preview_complete(success, message, rendered_paths))
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
 
-    def _on_render_preview_complete(self, success: bool, message: str):
+    def _ctx_send_to_extractor(self):
+        """将选中文件的同组文件发送到资源提取工具"""
+        items = self._get_selected_items()
+        if not items:
+            return
+
+        # ADB 模式下先缓存文件
+        items = self._ensure_items_local(items)
+        selected = [item.effective_path for item in items]
+
+        self._status_label.config(text=t("status.processing"))
+
+        def _run():
+            # 在后台线程中搜索同组所有文件（ADB 模式下拉取远程文件可能较慢）
+            bundle_paths = self._collect_prefix_group_files(selected)
+            if not self.should_stop() and self.winfo_exists():
+                self.after(0, lambda: self._on_send_to_extractor(bundle_paths))
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    def _on_send_to_extractor(self, bundle_paths: list[Path]):
+        """发送完成：填入资源提取工具并切换到对应 Tab"""
+        self._status_label.config(text=t("status.done"))
+        if not bundle_paths:
+            messagebox.showwarning(t("common.warning"), t("message.no_bundle_found"))
+            return
+
+        tab = self.app.tabs.asset_extractor
+        tab.bundle_dropzone.set_files(bundle_paths)
+        self.app.show_tab(tab)
+
+    def _ctx_cache_to_local(self):
+        """将选中的 ADB 文件缓存到本地"""
+        # 非 ADB 模式下不执行
+        if not self._is_adb_mode():
+            return
+
+        items = self._get_selected_items()
+        if not items:
+            return
+
+        # ADB 模式下，所有文件都来自远程，需要缓存
+        adb_items = [item for item in items if item.local_cache_path is None]
+        if not adb_items:
+            # 所有文件已缓存
+            messagebox.showinfo(t("common.tip"), t("message.adb.cache_complete"), parent=self)
+            return
+
+        adb_source = self.app.get_adb_file_source()
+        self._status_label.config(text=t("log.adb.cache_caching"))
+        self._progress["value"] = 0
+
+        def _run():
+            total = len(adb_items)
+            fail_count = 0
+            success_count = 0
+            for i, item in enumerate(adb_items):
+                if self.should_stop() or not self.winfo_exists():
+                    return
+                if item.local_cache_path is None:
+                    try:
+                        local_path = adb_source.ensure_local(str(item.path))
+                        item.local_cache_path = local_path
+                        success_count += 1
+                    except Exception as e:
+                        fail_count += 1
+                        self.after(0, lambda e=e: self.app.logger.log(
+                            t("log.adb.pull_failed", path=item.path.name, error=e)
+                        ))
+                else:
+                    success_count += 1
+                if not self.should_stop() and self.winfo_exists():
+                    self.after(0, lambda i=i: self._update_progress(i + 1, total, item.path.name))
+
+            if not self.should_stop() and self.winfo_exists():
+                self.after(0, lambda: self._on_cache_complete(success_count, fail_count))
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    def _on_cache_complete(self, success_count: int = 0, fail_count: int = 0):
+        """缓存完成回调"""
+        if self.should_stop() or not self.winfo_exists():
+            return
+        self._progress["value"] = 0
+        msg = t("message.adb.cache_complete", success=success_count, fail=fail_count)
+        self._status_label.config(text=msg)
+        self.app.logger.log(msg)
+
+    def _on_render_preview_complete(self, success: bool, message: str, rendered_paths: list[Path]):
         """渲染预览图完成"""
-        if self._closed:
+        if self.should_stop() or not self.winfo_exists():
             return
 
         self._progress["value"] = 0
         self._status_label.config(text=t("status.done") if success else t("status.failed"))
 
         if success:
-            messagebox.showinfo(t("action.render_preview"), message)
+            if rendered_paths:
+                # 弹出预览窗口展示渲染结果
+                PreviewWindow(self, self.app, rendered_paths)
+            else:
+                messagebox.showinfo(t("action.render_preview"), message)
         else:
             messagebox.showerror(t("common.error"), message)
 
     # -------- 生命周期 --------
 
     def _on_close(self):
-        self._closed = True
+        """重写关闭方法以清理窗口引用"""
         if hasattr(self.app, '_file_list_window'):
             self.app._file_list_window = None
-        self.destroy()
+        super()._on_close()

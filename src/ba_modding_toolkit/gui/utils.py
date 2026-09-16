@@ -10,9 +10,9 @@ import shutil
 from typing import Callable, TYPE_CHECKING
 import ttkbootstrap as tb
 
-from ..utils import no_log
+from ..utils import CREATE_NO_WINDOW, no_log
 from ..i18n import t
-from ..models import FilePair, FileType
+from ..models import FilePair, FileType, AnimDiffMap, LogFunc
 
 from tkinterdnd2.TkinterDnD import DnDWrapper, _require
 from ttkbootstrap.window import Window as tbWindow
@@ -94,6 +94,17 @@ def handle_drop(event: tk.Event,
     callback(path)
     return True
 
+def _is_wsl() -> bool:
+    """检测当前是否运行在 WSL 环境"""
+    if sys.platform != 'linux':
+        return False
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower()
+    except Exception:
+        return False
+
+
 def open_directory(path: str | Path, log = no_log, create_if_not_exist: bool = False) -> None:
     """
     打开文件资源管理器。
@@ -117,14 +128,7 @@ def open_directory(path: str | Path, log = no_log, create_if_not_exist: bool = F
                 return
         
         # 检测是否为 WSL 环境
-        is_wsl = False
-        if sys.platform == 'linux':
-            try:
-                with open('/proc/version', 'r') as f:
-                    if 'microsoft' in f.read().lower():
-                        is_wsl = True
-            except Exception:
-                pass
+        is_wsl = _is_wsl()
 
         # --- 打开目录 ---
         if sys.platform == 'win32':
@@ -136,11 +140,12 @@ def open_directory(path: str | Path, log = no_log, create_if_not_exist: bool = F
                 # 使用 wslpath -w 将 Linux 路径转换为 Windows 路径
                 result = subprocess.run(
                     ['wslpath', '-w', str(path_obj)], 
-                    capture_output=True, text=True, check=True
+                    capture_output=True, text=True, check=True,
+                    creationflags=CREATE_NO_WINDOW,
                 )
                 windows_path = result.stdout.strip()
 
-                subprocess.run(['explorer.exe', windows_path])
+                subprocess.run(['explorer.exe', windows_path], creationflags=CREATE_NO_WINDOW)
                 path_obj = Path(windows_path)  # 更新路径为Windows路径
                 
             except subprocess.CalledProcessError as e:
@@ -152,9 +157,9 @@ def open_directory(path: str | Path, log = no_log, create_if_not_exist: bool = F
             # Linux/macOS
             try:
                 if sys.platform == 'darwin':  # macOS
-                    subprocess.run(['open', str(path_obj)], check=True)
+                    subprocess.run(['open', str(path_obj)], check=True, creationflags=CREATE_NO_WINDOW)
                 else:  # Linux
-                    subprocess.run(['xdg-open', str(path_obj)], check=True)
+                    subprocess.run(['xdg-open', str(path_obj)], check=True, creationflags=CREATE_NO_WINDOW)
                 
             except (subprocess.CalledProcessError, FileNotFoundError):
                 messagebox.showinfo(t("common.tip"), t("message.open_manually", path=path_obj))
@@ -163,6 +168,66 @@ def open_directory(path: str | Path, log = no_log, create_if_not_exist: bool = F
         # 统一记录成功打开目录的日志
         log(t("log.file.directory_opened", path=path_obj))
                 
+    except Exception as e:
+        messagebox.showerror(t("common.error"), t("message.process_failed", error=e))
+
+def open_in_os(path: str | Path) -> None:
+    """
+    使用系统默认程序打开文件（跨平台）。
+
+    Windows 用 os.startfile；macOS 用 open；Linux 用 xdg-open；
+    WSL 下经 wslpath 转换为 Windows 路径后调用 explorer.exe。
+    """
+    try:
+        path_obj = Path(path).resolve()
+        if sys.platform == 'win32':
+            os.startfile(str(path_obj))
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', str(path_obj)], check=True, creationflags=CREATE_NO_WINDOW)
+        elif _is_wsl():
+            # WSL 环境：先转换路径，再调用 explorer.exe 以默认关联程序打开
+            result = subprocess.run(
+                ['wslpath', '-w', str(path_obj)],
+                capture_output=True, text=True, check=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            subprocess.run(['explorer.exe', result.stdout.strip()], creationflags=CREATE_NO_WINDOW)
+        else:
+            subprocess.run(['xdg-open', str(path_obj)], check=True, creationflags=CREATE_NO_WINDOW)
+    except Exception as e:
+        messagebox.showerror(t("common.error"), t("message.process_failed", error=e))
+
+def reveal_in_explorer(path: str | Path) -> None:
+    """
+    在文件管理器中打开文件所在目录并选中该文件（类似 Everything 的“打开路径”）。
+
+    Windows 用 explorer /select；macOS 用 open -R
+    WSL 下经 wslpath 转换后调用 explorer.exe /select
+    其他 Linux 无统一选中接口，仅打开所在目录。
+    """
+    try:
+        path_obj = Path(path).resolve()
+        if sys.platform == 'win32':
+            # explorer 的命令行解析不规范：list 形式传参会在路径含空格时把整个参数
+            subprocess.Popen(
+                f'explorer /select,"{path_obj}"',
+                creationflags=CREATE_NO_WINDOW,
+            )
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', '-R', str(path_obj)], check=True, creationflags=CREATE_NO_WINDOW)
+        elif _is_wsl():
+            # WSL 环境：先转换路径，再调用 explorer.exe 定位文件
+            result = subprocess.run(
+                ['wslpath', '-w', str(path_obj)],
+                capture_output=True, text=True, check=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            subprocess.Popen(
+                f'explorer.exe /select,"{result.stdout.strip()}"',
+                creationflags=CREATE_NO_WINDOW,
+            )
+        else:
+            subprocess.run(['xdg-open', str(path_obj.parent)], check=True, creationflags=CREATE_NO_WINDOW)
     except Exception as e:
         messagebox.showerror(t("common.error"), t("message.process_failed", error=e))
 
@@ -199,6 +264,31 @@ def _perform_file_replace(
     except Exception as e:
         log(t("log.process_failed", error=e))
         return False
+
+
+def warn_anim_diffs(
+    data: AnimDiffMap,
+    log: LogFunc,
+) -> None:
+    """
+    输出动画缺失警告：在日志中详细列出缺失动画，并弹出警告框提示后果。
+
+    Args:
+        data: 动画差异数据，{skel名: [缺失动画列表]}
+        log: 日志函数（GUI 日志面板）
+    """
+    if not data:
+        return
+
+    # 日志详细输出
+    log(f"\n⚠️  {t('log.spine.anim_diff_title')}")
+    for skel, anims in data.items():
+        log(f"  - {skel} ({t('log.spine.anim_diff_item_count', count=len(anims))})")
+        log(f"    {t('log.spine.anim_diff_missing_list', animations=', '.join(anims))}")
+    log(f"{t('log.spine.anim_diff_hint')}")
+
+    # 警告弹窗，提示后果并引导查看日志
+    messagebox.showwarning(t("ui.anim_diff.title"), t("message.anim_diff.header"))
 
 
 def replace_file(
@@ -354,7 +444,7 @@ def confirm_and_replace(
 
     return True
 
-def select_directory(var: tk.Variable = None, title="", log=no_log):
+def select_directory(var: tk.Variable = None, title="", log=no_log, parent: tk.Widget | None = None):
     """
     选择目录并更新变量或返回路径
     
@@ -362,6 +452,7 @@ def select_directory(var: tk.Variable = None, title="", log=no_log):
         var: tkinter变量，用于存储选择的目录路径，如果为None则直接返回路径
         title: 目录选择对话框的标题
         log: 日志函数，用于记录操作
+        parent: 父窗口组件，保证对话框置顶于其父窗口（可选）
         
     Returns:
         如果var为None，返回选择的目录路径字符串，否则返回None
@@ -373,7 +464,7 @@ def select_directory(var: tk.Variable = None, title="", log=no_log):
             if current_path.is_dir(): 
                 initial_dir = str(current_path)
                 
-        selected_dir = filedialog.askdirectory(title=title, initialdir=initial_dir)
+        selected_dir = filedialog.askdirectory(title=title, initialdir=initial_dir, parent=parent)
         if selected_dir:
             if var is not None:
                 var.set(str(Path(selected_dir)))
@@ -387,11 +478,12 @@ def select_directory(var: tk.Variable = None, title="", log=no_log):
         messagebox.showerror(t("common.error"), t("message.process_failed", error=e))
         return None
 
-def select_file(title: str, 
-                file_types: list[FileType | str] | list[tuple[str, str]] | None = None, 
+def select_file(title: str,
+                file_types: list[FileType | str] | list[tuple[str, str]] | None = None,
                 multiple: bool = False,
                 callback: Callable[[Path | list[Path]], None] | None = None,
-                log = no_log) -> Path | list[Path] | None:
+                log = no_log,
+                parent: tk.Widget | None = None) -> Path | list[Path] | None:
     """
     统一的文件选择对话框函数
     
@@ -401,6 +493,7 @@ def select_file(title: str,
         multiple: 是否支持多选
         callback: 选择文件后的回调函数，接收Path或Path列表作为参数
         log: 日志函数，用于记录操作
+        parent: 父窗口组件，保证对话框置顶于其父窗口（可选）
         
     Returns:
         单选时返回Path或None，多选时返回Path列表或空列表
@@ -417,7 +510,7 @@ def select_file(title: str,
             tk_filetypes = file_types
             
         if multiple:
-            filepaths = filedialog.askopenfilenames(title=title, filetypes=tk_filetypes)
+            filepaths = filedialog.askopenfilenames(title=title, filetypes=tk_filetypes, parent=parent)
             if filepaths:
                 paths = [Path(p) for p in filepaths]
                 log(t("log.file.loaded", path=f"{len(paths)} files"))
@@ -426,7 +519,7 @@ def select_file(title: str,
                 return paths
             return []
         else:
-            filepath = filedialog.askopenfilename(title=title, filetypes=tk_filetypes)
+            filepath = filedialog.askopenfilename(title=title, filetypes=tk_filetypes, parent=parent)
             if filepath:
                 path = Path(filepath)
                 log(t("log.file.loaded", path=path))

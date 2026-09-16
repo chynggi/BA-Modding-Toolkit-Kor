@@ -35,7 +35,6 @@
 		"update": "更新",
 		"pack": "打包",
 		"extract": "提取",
-		"convert": "转换",
 		"calculate_crc": "计算 CRC",
 		"check_crc": "检查 CRC",
 		"run_crc_correction": "运行CRC修正",
@@ -47,11 +46,22 @@
 		"analyze": "分析",
 		"open_in_explorer": "打开所在目录",
 		"copy_filename": "复制文件名",
-		"render_preview": "渲染预览图"
+		"render_preview": "渲染预览图",
+		"send_to_extractor": "发送到资源提取工具",
+		"cache_to_local": "缓存到本地",
+		"detect": "检测",
+		"clear_cache": "清理缓存",
+		"generate": "生成",
+		"fix_all": "修复全部",
+		"start_backup": "开始备份"
 	},
 	"option": {
-		"auto_detect_subdirs": "自动检测标准子目录 (GameData/Preload)",
-		"auto_detect_subdirs_info": "",
+		"file_source": "文件来源",
+		"file_source_info": "选择游戏资源来源平台和区服 \n- Windows 国际服 (本地) \n- Windows 日服 (本地) \n- Android 国际服 (ADB) \n- Android 日服 (ADB)",
+		"file_source_windows_global": "Windows 国际服 (本地)",
+		"file_source_windows_japan": "Windows 日服 (本地)",
+		"file_source_adb_global": "Android 国际服 (ADB)",
+		"file_source_adb_japan": "Android 日服 (ADB)",
 		"crc_correction": "CRC修正",
 		"crc_correction_info": "修正 Bundle 文件的 CRC 校验值，防止文件被修改后出现“不正常的客户端”提示。\nSteam 版本必须开启此选项，手机端无需开启。\n选择“自动”时，会根据目标 Bundle 文件的平台信息自动判断是否需要开启。",
 		"extra_bytes": "额外字节",
@@ -73,17 +83,25 @@
 		"spine_conversion": "启用 Spine 版本转换",
 		"spine_conversion_info": "（可选扩展功能）\n调用外部程序，将 .skel 文件转换为支持的版本\n需要配置 Skel 转换器的路径。",
 		"spine_target_version": "目标版本",
-		"spine_target_version_info": "格式应为 \"A.B.C\" 形式",
+		"spine_target_version_info": "格式应为 \"A.B.C\" 形式\n资源中与配置版本不匹配的 skel 将被拒绝处理\n配置并启用 Skel 转换器时会自动转换到该版本",
+		"preview_thumbnail_size": "预览图缩略图尺寸",
+		"preview_thumbnail_size_info": "预览窗口中缩略图的最大边长（像素）",
 		"spine_downgrade": "启用 Spine 降级",
 		"spine_downgrade_info": "（可选扩展功能）\n调用外部程序，导出支持旧版 Spine 的文件（.skel 与 .atlas）\n需要配置 Skel 转换器的路径。",
 		"spine_downgrade_target_version": "目标版本",
 		"spine_downgrade_target_version_info": "格式应为 \"A.B.C\" 形式",
+		"scale_atlas": "缩放图片",
+		"scale_atlas_info": "高级选项\n在降级 Spine 时，可决定是否根据 Atlas 文件中的 scale 系数缩放图片。\n\n启用缩放：自动将图片调整到匹配尺寸，可直接导入 Spine，但会有精度损失，可能导致各部分对不齐。同时游戏内渲染也会使用缩放后的图片，精度降低。\n不缩放（默认）：保留原始精度，游戏内渲染效果最佳，推荐用于游戏导入。但若导入 Spine，区域 (region) 类型的附件尺寸不会改变，需手动将 scale 系数应用到骨骼的 Transform 中。\n\n缩放选项会同时影响游戏内渲染与 Spine 导入：不缩放时，游戏内表现正常，Spine 需手动调整；启用缩放时，图片被实际缩放，游戏内也会呈现缩放效果（有精度损失），Spine 则无需手动调整。\n对于导入 Spine 的场景，推荐高级用户采用不缩放 + 自行根据 scale 为骨骼/部件设置缩放的方式，效果最佳。",
 		"unpack_atlas": "解包 Atlas",
 		"unpack_atlas_info": "将 Atlas 解包为单独的 PNG 帧。\n解包后的帧保存在 images/ 子目录中。",
-		"auto_search": "自动搜索对应文件",
-		"auto_search_info": "",
-		"game_root_dir": "游戏根目录",
-		"game_root_dir_info": "设置游戏安装目录，用于自动寻找原版的 Bundle 文件。\n程序能够自动检测以下路径的子目录：\n- BlueArchive_Data/StreamingAssets/PUB/Resource/GameData/Windows\n- BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/Windows\n- GameData/Windows\n- Preload/Windows\n- GameData/Android\n- Preload/Android",
+		"game_dir_windows_global": "国际服Steam游戏目录",
+		"game_dir_windows_global_info": "国际服 Steam 版游戏的安装目录\n程序能够自动检测以下路径的子目录：\n- BlueArchive_Data/StreamingAssets/PUB/Resource/GameData/Windows\n- BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/Windows\n- GameData/Windows\n- Preload/Windows",
+		"game_dir_windows_japan": "日服PC游戏目录",
+		"game_dir_windows_japan_info": "日服 PC 版游戏的安装目录",
+		"game_dir_android_global": "Android(国际服) 目录",
+		"game_dir_android_global_info": "国际服 Android 设备上的游戏资源目录\n如: /storage/emulated/0/Android/data/com.nexon.bluearchive/files/",
+		"game_dir_android_japan": "Android(日服) 目录",
+		"game_dir_android_japan_info": "日服 Android 设备上的游戏资源目录\n如: /storage/emulated/0/Android/data/com.Yostar JP.BlueArchive/files/",
 		"language": "语言 / Language",
 		"language_info": "程序显示的语言。\n更改后需要重启程序才能生效。",
 		"output_dir": "输出目录",
@@ -92,18 +110,46 @@
 		"skel_converter_path_info": "SpineSkeletonDataConverter.exe 文件的路径",
 		"spine_viewer_path": "SpineViewerCLI 路径",
 		"spine_viewer_path_info": "SpineViewerCLI.exe 文件的路径（用于渲染预览图）",
+		"check_animations": "检测动画差异",
+		"check_animations_info": "在替换 .skel 文件时，检测目标是否包含来源中不存在的动画\n需要配置 SpineViewerCLI 路径",
 		"match_strategy": "匹配策略",
 		"match_strategy_info": "选择资源匹配策略：\n- path_id: 适用于同版本文件，替换最准确\n- cont_name_type: 使用容器+名称+类型匹配，适用于跨版本迁移（国际服与日服之间）\n- name_type: 使用名称+类型匹配",
 		"enable_bleed": "溢出",
 		"enable_bleed_info": "为图片文件进行 Bleed 操作\n如果打包后的图片在游戏中出现黑色、锯齿状边缘，建议开启此选项。",
 		"enable_spine38_name_fix": "重命名旧版 Spine 文件名",
 		"enable_spine38_name_fix_info": "将旧版 Spine 导出的文件名格式重命名为新版本格式\n例如：CH0808_home2.png → CH0808_home_2.png",
+		"enable_spine_preview": "生成 Spine 预览图",
+		"enable_spine_preview_info": "为 Spine 资源生成预览图（需要配置 SpineViewerCLI 路径）\n\n注意：该功能耗时较长。",
+		"extractor_render_preview": "渲染预览图",
+		"extractor_render_preview_info": "解包完成后，为提取出的 Spine 资源渲染预览图（需要配置 SpineViewerCLI 路径）。",
+		"report_format": "报告格式",
+		"report_format_info": "选择报告的输出格式：\n- 列表式：每项一行，适合快速浏览\n- 表格式：Markdown 表格，适合渲染预览图的情况下使用",
+		"report_format_list": "列表式",
+		"report_format_table": "表格式",
+		"report_render_preset": "预览画质",
+		"report_render_preset_info": "选择预览图的渲染画质。\n更高的画质可能会消耗更长的时间来渲染。",
+		"report_render_preset_low": "低画质",
+		"report_render_preset_high": "高画质",
+		"render_characters": "渲染角色立绘",
+		"render_characters_info": "渲染 spinecharacters 分类的 Spine 资源预览图",
+		"render_lobbies": "渲染记忆大厅",
+		"render_lobbies_info": "渲染 spinelobbies 分类的 Spine 资源预览图",
+		"render_background": "渲染其它 Spine 资源",
+		"render_background_info": "渲染 spinebackground 分类的 Spine 资源预览图",
 		"max_workers": "并行线程数",
-		"max_workers_info": "同时处理的 Mod 文件数量。\n增加数量可提高处理速度，但会增加内存占用。",
+		"max_workers_info": "批量处理任务（批量更新 / 批量预览渲染等）的并行线程数。\n增加数量可提高处理速度，但会增加内存与 CPU 占用。",
 		"character_id_map": "角色ID映射表",
-		"character_id_map_info": "角色内部ID与名称的映射表，用于在文件列表中显示角色名称",
+		"character_id_map_info": "角色内部ID与名称的映射表，用于显示文件对应的角色实际名称",
+		"character_index_column": "索引列",
+		"character_index_column_info": "映射表 CSV 中用作查找键（角色内部ID）的列。\n其键值应该形如CH0808这种形式。",
 		"character_name_field": "角色名称",
-		"character_name_field_info": "选择角色名称的显示字段：\nfull_name: 基沃托斯古书馆（最完整）\nname_cn: 国服名称\nname_jp: 日语名称\nname_tw: 繁體中文\nname_en: 英语名称\nname_kr: 韩语名称"
+		"character_name_field_info": "选择角色名称的显示字段：\nfull_name: 基沃托斯古书馆（最完整）\nname_cn: 国服名称\nname_jp: 日语名称\nname_tw: 繁體中文\nname_en: 英语名称\nname_kr: 韩语名称\n\n其中，英语与韩语只含有角色姓名，日文、国服、繁体中文版本还包含角色的服装变体名称（例如：泳装、女仆等），基沃托斯古书馆版本额外包含了更多NPC版本的名称（例如：运动服、无武器等）。",
+		"adb_path": "ADB 路径",
+		"adb_path_info": "adb.exe 的完整路径，或 \"adb\" 使用系统环境变量",
+		"adb_cache_dir": "缓存路径",
+		"adb_cache_dir_info": "ADB 文件的本地缓存目录",
+		"backup_path": "备份路径",
+		"backup_path_info": "选择备份文件的保存目录"
 	},
 	"file_type": {
 		"executable": "可执行文件",
@@ -126,6 +172,7 @@
 		"dir_not_found_create": "目录不存在:\n{path}\n\n是否要创建它？",
 		"path_invalid": "路径无效: {path}",
 		"no_file_selected": "未选择文件。",
+		"no_bundle_found": "未找到 bundle 文件",
 		"list_empty": "列表为空，请先添加项目。",
 		"drop_single_file": "请一次只拖放一个文件。",
 		"missing_paths": "请确保已设置所有必要的路径",
@@ -137,7 +184,6 @@
 		"open_manually": "请手动打开目录：{path}",
 		"invalid_operation": "操作无效",
 		"execution_error": "执行过程中发生错误:\n{error}",
-		"create_dir_failed_detail": "无法创建目录:\n{path}\n\n错误详情: {error}",
 		"output_dir_not_set": "未设置输出目录，请先在设置中配置输出目录。",
 		"save_success": "文件保存成功。",
 		"same_file": "两个路径一致！",
@@ -168,7 +214,16 @@
 			"match_no": "CRC值匹配: ❌否",
 			"correction_failed_file_not_generated": "CRC 修正失败。最终文件 \"{name}\" 未能生成。"
 		},
-		"spine": {},
+		"spine": {
+			"version_conflict_header": "以下 .skel 文件的 Spine 版本与目标版本 ({major_minor}.x) 不一致，已拒绝替换：",
+			"version_conflict_item": "  - {name}（来源版本 {source}）",
+			"version_conflict_hint": "请检查 Spine 转换器设置。"
+		},
+		"report_open_prompt": "报告已生成！\n是否打开报告文件？",
+		"batch_preview_open_prompt": "批量渲染完成！\n成功 {rendered} / {total} 组，是否打开输出目录？",
+		"batch_preview": {
+			"no_category": "请至少选择一个需要渲染的分类。"
+		},
 		"search": {
 			"check_file_exists": "请检查 \"{path}\" 是否存在。",
 			"no_matching_files_in_dir": "在指定目录中未找到任何匹配的文件。",
@@ -183,30 +238,49 @@
 			"extraction_complete": "提取完成，共输出 {count} 个文件。"
 		},
 		"mod_update": {
-			"success": "一键更新成功！",
+			"success": "更新成功！",
 			"no_assets_extracted": "没有资源被提取",
 			"no_targets_processed": "没有目标文件被成功处理",
 			"all_targets_unchanged": "所有目标文件内容均未变化，无需更新"
-		},
-		"legacy_convert": {
-			"modern_to_legacy_success": "新版 -> 旧版 转换成功！\n已替换 {asset_count} 个 资源",
-			"legacy_to_modern_success": "旧版 -> 新版 转换成功！\n已替换 {bundle_count} 个 Bundle，{asset_count} 个资源",
-			"conversion_error": "转换过程中发生错误:\n{error}",
-			"no_assets_in_source": "源文件中未找到任何可提取资源，无法进行转换。",
-			"no_assets_matched": "未找到任何匹配的资源，无法进行转换。",
-			"load_legacy_failed": "无法加载旧版文件"
 		},
 		"save_error": "保存文件时发生错误: {error}",
 		"replace_result": "已完成替换！成功：{success}，失败：{fail}",
 		"batch": {
 			"success": "批量处理完成！\n成功: {success}，失败: {fail}"
 		},
+		"anim_diff": {
+			"header": "游戏需要的一些新增动画在本 Mod 中缺失。\n当这些动画在游戏中播放时（例如剧情事件），\n可能会导致游戏卡死。\n\n为避免此类问题，请查看上方日志中的详细缺失列表，\n并与 Mod 作者确认正确更新。"
+		},
 		"3rd_party": {
 			"download_guide": "是否前往下载 {program}？\n{url}",
 			"skel_converter_not_configured": "SpineSkeletonDataConverter 未配置。\n请在设置页面配置 SpineSkeletonDataConverter 的路径。",
 			"spine_viewer_required": "SpineViewerCLI 程序未设置或路径无效。\n如果要启用该功能，请您自行下载 SpineViewer 程序，并遵守其协议。\n\n请在设置中配置 SpineViewerCLI 的路径。"
 		},
-		"download_confirm": "将从此地址下载文件：\n{url}\n\n保存至：{path}"
+		"download_confirm": "将从此地址下载文件：\n{url}\n\n保存至：{path}",
+		"adb": {
+			"detect_success": "ADB 检测成功: {version}",
+			"detect_failed": "ADB 检测失败，请检查路径是否正确",
+			"not_connected": "ADB 设备未连接",
+			"clear_cache_confirm": "确定要清理所有 ADB 缓存文件吗？",
+			"clear_cache_done": "缓存已清理，释放 {size}",
+			"push_confirm": "以下文件将被推送到 Android 设备，是否继续？\n{files}",
+			"cache_complete": "缓存完成，成功 {success} 个，失败 {fail} 个",
+			"no_local_files": "请先选择要推送的本地文件",
+			"no_target_dir": "请填写目标目录",
+			"push_summary": "推送完成：成功 {success} 个，失败 {fail} 个"
+		},
+		"abnormal_check": {
+			"no_mismatch": "未发现CRC不匹配的文件",
+			"confirm_fix": "确定修复 {count} 个文件的CRC值？",
+			"fix_complete": "修复完成"
+		},
+		"backup": {
+			"path_required": "请先选择备份路径",
+			"clear_confirm": "备份目录已存在，是否清空后重新备份？",
+			"open_prompt": "备份完成，共备份 {count} 个 Mod 文件。\n是否打开备份目录？",
+			"no_mod_found": "未发现 mod 文件"
+		},
+		"task_running_close_confirm": "任务正在运行中，关闭窗口将停止任务。\n\n确定要关闭窗口吗？"
 	},
 	"status": {
 		"ready": "准备就绪",
@@ -268,9 +342,12 @@
 			"skel_conversion_failed": "skel 转换失败",
 			"skel_detected": "检测到 .skel 文件: {name}",
 			"version_mismatch_converting": "检测到Spine版本不匹配（当前{current}，目标{target}），将进行转换。",
+			"version_mismatch_no_convert": "检测到Spine版本不匹配（当前{current}，目标{target}），且 Spine 转换器未启用。",
+			"version_conflict_rejected": "检测到 {count} 个 .skel 版本冲突，已拒绝替换",
 			"converting_atlas": "正在转换 Atlas: {name}",
 			"version_detected_downgrading": "检测到Spine版本: {version}，尝试降级...",
 			"atlas_downgrade_success": "Atlas 降级成功",
+			"legacy_rename_detected": "检测到旧版文件名需要修正",
 			"edit_atlas": "编辑了 Atlas 文件: {filename}",
 			"unpacking_atlas": "正在解包 Atlas: {name}",
 			"atlas_unpack_success": "Atlas 解包成功，帧已保存至: {path}",
@@ -286,18 +363,27 @@
 			"no_animation_found": "未找到可用动画: {name}",
 			"using_first_animation": "未找到 Idle_01 或 Dummy，使用第一个动画: {anim}",
 			"preview_complete": "预览图渲染完成，共生成 {count} 个文件",
-			"preview_failed": "预览图渲染失败"
+			"preview_failed": "预览图渲染失败",
+			"anim_check_comparing": "正在检测动画差异: {name}",
+			"anim_check_new_animations": "目标 {name} 含有来源不存在的动画: {animations}",
+			"anim_check_no_diff": "{name} 动画一致",
+			"anim_check_failed": "动画差异检测失败: {error}",
+			"anim_diff_title": "以下文件包含原 Mod 中缺失的新增动作：",
+			"anim_diff_item_count": "缺失 {count} 个动画",
+			"anim_diff_missing_list": "缺失列表: {animations}",
+			"anim_diff_hint": "提示: 原版游戏可能更新了动作，若直接使用旧 Mod，这些动作触发时可能会导致游戏卡死。"
 		},
 		"packer": {
 			"start_packing": "开始打包资源...",
 			"pack_success_path": "打包成功。文件已输出至: {path}",
 			"found_files_to_process": "找到 {count} 个待处理文件，正在扫描 bundle 并进行替换...",
 			"no_assets_packed": "没有执行任何成功的资源打包。",
-			"check_files_and_bundle": "请检查：\n1. 文件名是否与 bundle 内的资源名完全匹配。\n2. bundle 文件是否正确。",
+			"no_changes_saved": "未修改资源，保存原始 bundle: {name}",
 			"packing_complete": "打包完成: 成功打包 {success} / {total} 个资源。",
 			"unmatched_files_warning": "以下文件未在bundle中找到对应的资源",
 			"attempted_match": "尝试匹配: \"{key}\"",
-			"bleed_processed": "对图像 {name} 进行了 Bleed 处理"
+			"bleed_processed": "对图像 {name} 进行了 Bleed 处理",
+			"strategy_success": "策略 {strategy} 成功应用 {count} 个资源"
 		},
 		"crc": {
 			"loaded_original": "已加载原始文件: {file}",
@@ -313,13 +399,30 @@
 			"modified_file_crc32": "待修正文件 CRC32：{crc}",
 			"original_file_crc32": "原始文件　 CRC32：{crc}"
 		},
+		"report": {
+			"scan_start": "开始扫描",
+			"analyze_trailing": "分析尾部字节",
+			"bundle_count": "扫描到 {count} 个 bundle 文件",
+			"mod_count": "发现 {count} 个 mod 文件",
+			"render_preview": "渲染预览图",
+			"render_retry": "Mod 内容未包含完整资源，尝试包含原始文件: {prefix}",
+			"render_count": "渲染完成，共 {count} 个",
+			"no_mod_found": "未找到 mod 文件",
+			"saved": "报告已保存至: {path}",
+			"success": "报告生成成功，共 {count} 个 Mod"
+		},
+		"batch_preview": {
+			"scan_start": "开始批量渲染扫描",
+			"no_spine_found": "未找到 Spine 资源",
+			"group_count": "共 {count} 组 Spine 资源待渲染",
+			"render_count": "批量渲染完成，成功 {count} / {total} 组"
+		},
 		"section": {
 			"extract_to_temp": "提取资源到临时目录",
 			"move_to_output": "移动提取的文件到输出目录",
 			"process_spine_downgrade": "处理Spine资产并降级",
 			"process_atlas_unpack": "解包 Atlas 帧图片",
 			"render_preview": "渲染预览图",
-			"applying_to_global": "正在应用到国际服文件",
 			"applying_to_targets": "应用到目标文件组",
 			"extracting_patches": "正在提取补丁"
 		},
@@ -336,9 +439,7 @@
 			"found_candidates": "找到 {count} 个候选文件，正在验证内容...",
 			"source_mod_asset_count": "源文件组包含 {count} 个资源。",
 			"checking_candidate": "正在检查: {name}",
-			"find_failed": "查找失败: {message}",
-			"found_count": "成功查找到 {count} 个匹配文件。",
-			"no_found": "未找到文件"
+			"find_failed": "查找失败: {message}"
 		},
 		"extractor": {
 			"starting_extraction": "开始从 \"{filename}\" 提取资源...",
@@ -348,19 +449,6 @@
 			"skipping_unnamed": "跳过一个未命名的 {type} 资源",
 			"extraction_failed": "提取资源 {name} 时发生错误: {error}",
 			"processing_file": "正在处理：{name}"
-		},
-		"migration": {
-			"extracting_from_old_bundle": "正在从旧版 bundle 中提取指定类型的资源: {types}",
-			"loading_new_bundle": "正在加载新版 bundle...",
-			"trying_strategy": "正在尝试使用 \"{name}\" 策略进行匹配",
-			"extracting_from_old_bundle_simple": "从旧版 bundle 提取资源...",
-			"strategy_no_assets_found": "使用 \"{name}\" 策略未在旧版 bundle 中找到任何指定类型的资源。",
-			"extraction_complete": "提取完成: 使用 \"{name}\" 策略提取了 {count} 个资源。",
-			"writing_to_new_bundle": "向新版 bundle 写入资源...",
-			"strategy_success": "策略 \"{name}\" 成功替换了 {count} 个资源",
-			"strategy_no_match": "策略 \"{name}\" 未能匹配到任何资源。",
-			"all_strategies_failed": "所有匹配策略均未能在新版 bundle 中找到可替换的资源 ({types})。",
-			"strategy_skipped_unchanged": "策略 \"{name}\"：所有文件内容未变化，跳过生成"
 		},
 		"mod_update": {
 			"all_processes_complete": "全部流程处理完成！共处理 {count} 个资源。",
@@ -382,29 +470,12 @@
 			"process_unchanged": "内容未变化，跳过: {filename}",
 			"output_files_list": "输出文件列表（共 {count} 个）："
 		},
-		"legacy_convert": {
-			"found_match": "成功找到: {path}",
-			"searching_jp_counterparts": "正在为 \"{name}\" 搜索对应的JP文件...",
-			"extracted_count_from_jp": "从日服文件提取了 {count} 个资源",
-			"no_assets_replaced": "未替换任何资源",
-			"starting_conversion": "开始转换...",
-			"extracted_count": "提取了 {count} 个资源。",
-			"conversion_complete": "转换完成！",
-			"file_unchanged": "文件内容未变化: {name}（{count} 个资源），跳过生成",
-			"legacy_source_file": "旧版源文件: {name}",
-			"modern_files_count": "选中的新版文件数量: {count}"
-		},
 		"summary": {
 			"title": "处理总结",
 			"total_files": "总计: {count} 个文件",
 			"output_files": "已输出: {count} 个",
 			"skipped_files": "已跳过: {count} 个",
-			"failed_files": "失败: {count} 个",
-			"replaced_assets": "替换 {count} 个资源",
-			"no_changes": "内容未变化",
-			"output_item": "  - {name} ({detail})",
-			"skipped_item": "  - {name}",
-			"failed_item": "  - {name}: {reason}"
+			"no_changes": "内容未变化"
 		},
 		"game_dir_not_set": "未设置游戏资源目录，无法自动寻找原始文件。",
 		"file_not_found_in_dirs": "未能在指定的资源目录中找到对应的原始文件 \"{filename}\"。",
@@ -413,14 +484,40 @@
 		"success_fail": "成功：{success}，失败：{fail}",
 		"error_detail": "发生错误：{error}",
 		"error_processing": "处理过程中发生错误：{error}",
-		"processing_filename_with_progress": "({current}/{total}) 正在处理文件: {name}",
 		"process_failed": "处理失败: {error}",
 		"replace_original": "现在可以按下\"{button}\"按钮来覆盖原始文件",
 		"generated_file_not_found": "操作提示成功，但在输出目录中找不到生成的文件。",
 		"replace_resource_failed": "替换资源 [{type}] {name} 时发生错误: {error}",
+		"replace_applied": "已替换 [{type}] {name}",
 		"replace_skipped_same_content": "跳过替换 [{type}] {name}：内容与原始文件相同",
 		"platform_info": "目标平台: {platform} (Unity {version})",
-		"unnamed_resource": "未命名的 {type} 资源"
+		"unnamed_resource": "未命名的 {type} 资源",
+		"adb": {
+			"cache_hit": "缓存命中: {name}",
+			"cache_miss": "缓存未命中，从设备拉取: {name}",
+			"pull_failed": "拉取失败: {path} - {error}",
+			"push_failed": "推送失败: {path} - {error}",
+			"list_dir_failed": "列出目录失败: {path} - {error}",
+			"push_start": "正在推送到设备: {name}",
+			"push_success": "推送成功: {name}",
+			"cache_caching": "正在缓存 {count} 个文件到本地...",
+			"cache_delete_failed": "删除缓存文件 {name} 失败: {error}",
+			"push_start_batch": "开始推送 {count} 个文件到 {dir}"
+		},
+		"abnormal_check": {
+			"found_count": "发现 {count} 个CRC不匹配的文件",
+			"fixing": "正在修复: {filename}",
+			"fix_success": "修复成功: {filename}",
+			"fix_failed": "修复失败: {filename}",
+			"fix_verify_failed": "修复验证失败: {filename}",
+			"fix_error": "修复 {filename} 时发生错误: {error}"
+		},
+		"backup": {
+			"start": "开始备份 Mod",
+			"found_mods": "发现 {count} 个 mod 文件",
+			"copying": "正在备份 ({current}/{total}): {filename}",
+			"done": "备份完成，共 {count} 个文件"
+		}
 	},
 	"ui": {
 		"app_title": "BA Modding Toolkit",
@@ -430,18 +527,67 @@
 			"crc_tool": "CRC 工具",
 			"asset_packer": "资源打包",
 			"asset_extractor": "资源提取",
-			"legacy_conversion": "旧版/新版转换",
-			"batch_legacy": "批量处理旧版",
-			"file_list": "文件列表"
+			"file_list": "文件列表",
+			"adb_push": "ADB 文件推送",
+			"tools": "工具"
+		},
+		"tools": {
+			"batch_tools": "批量工具",
+			"batch_tools_info": "Mod 检测方式：比对 bundle 文件头记录的大小与实际文件大小，若文件尾部存在额外追加的字节（trailing bytes）即判定为 Mod，下方的批量工具均基于此方式检测。\n\n注：该检测方式只保证对 Steam 版有效，其他版本的 Mod 无需 CRC 修正也能进入游戏，因此无法保证能检测到 Mod。",
+			"report": {
+				"title": "生成 Mod 报告",
+				"info": "扫描游戏目录中检测到的全部 Mod 文件，按分类汇总生成 Markdown 报告。可选渲染 Spine 文件预览图。"
+			},
+			"abnormal_check": {
+				"title": "修复\"不正常的用户端\"",
+				"info": "检测文件名中标注的 CRC 与实际文件 CRC 不一致的 Mod 文件（此类文件会被游戏客户端判定为异常），并支持一键修复。",
+				"result_list": "检测结果",
+				"column_filename": "文件名",
+				"column_char_name": "角色名",
+				"column_target_crc": "目标CRC",
+				"column_actual_crc": "实际CRC"
+			},
+			"backup": {
+				"title": "备份 Mod",
+				"info": "将游戏目录中检测到的全部 Mod 文件复制到指定备份目录，并保留原始目录结构。"
+			},
+			"batch_preview": {
+				"title": "批量渲染预览图",
+				"info": "渲染指定游戏资源目录下全部 Spine 资源（角色立绘、记忆大厅、Spine 背景）的预览图，不限于 Mod 文件。输出到输出目录的 batch_preview 子目录。",
+				"game_dir": "游戏资源目录"
+			}
 		},
 		"settings": {
 			"title": "设置",
 			"button_text": "设置",
 			"group_save": "保存设置",
 			"group_assets": "资源处理选项",
-			"group_spine": "Spine 工具设置",
+			"group_skel_converter": "Skel 转换器",
+			"group_spine_viewer": "SpineViewer",
+			"group_bacii": "角色名称",
+			"group_performance": "性能",
 			"group_app": "应用设置",
-			"group_paths": "路径设置"
+			"group_paths": "路径设置",
+			"group_adb": "ADB 设置",
+			"adb": {
+				"device": "设备选择",
+				"detecting": "正在检测...",
+				"device_connected": "设备就绪",
+				"device_unauthorized": "设备未授权，请在手机上允许 USB 调试",
+				"device_offline": "设备离线",
+				"cache_size": "缓存大小: {size}"
+			}
+		},
+		"column": {
+			"filename": "文件名",
+			"file_size": "大小",
+			"modified_time": "修改时间"
+		},
+		"adb_push": {
+			"local_files": "本地文件",
+			"placeholder_local": "将文件或文件夹拖放到此处...",
+			"target_dir": "目标目录（设备路径）",
+			"push": "推送到设备"
 		},
 		"mod_update": {
 			"placeholder_old": "拖放待更新或移植的 Mod 文件到此处\n或点击下方按钮选择",
@@ -460,22 +606,11 @@
 		"extractor": {
 			"placeholder_bundle": "拖放所有待提取资源的 Bundle 文件到此处\n或点击下方按钮选择"
 		},
-		"legacy_conversion": {
-			"mode_modern_to_legacy": "新版 → 旧版 (合并)",
-			"mode_legacy_to_modern": "旧版 → 新版 (拆分)",
-			"placeholder_modern_bundles": "拖放所有相关的新版 Bundle 到此处\n如：textures, textassets等",
-			"role_legacy_target": "旧版 Bundle (目标文件)",
-			"role_modern_source": "新版 Bundle (源文件)",
-			"role_legacy_source": "旧版 Bundle (源文件)",
-			"role_modern_target": "新版 Bundle (目标文件)",
-			"placeholder_legacy_bundle": "拖放旧版 Bundle 文件到此处\n或点击下方按钮选择"
-		},
 		"dialog": {
 			"select": "选择{type}",
-			"add": "添加{type}",
 			"select_file": "选择文件",
-			"multiple_matches_found": "找到 {count} 个匹配的文件：",
-			"selection_cancelled": "已取消选择"
+			"adb_browser": "ADB 文件选择器",
+			"adb_browser_dir": "ADB 目录选择器"
 		},
 		"drop_zone": {
 			"file_hint": "将文件拖放到此处\n或点击下方按钮选择",
@@ -484,9 +619,11 @@
 			"multiple_files_rejected": "仅支持单个文件",
 			"contains": "包含 {count} 个文件: {types}"
 		},
+		"preview": {
+			"double_click_hint": "双击图片查看原图"
+		},
 		"label": {
 			"mod_file": "待处理 Mod 文件",
-			"target_resource_bundle": "目标资源 Bundle",
 			"search_path": "查找路径:",
 			"assets_to_pack": "待打包资源文件",
 			"target_bundle_file": "目标 Bundle 文件",
@@ -496,7 +633,9 @@
 			"environment": "运行环境",
 			"github": "GitHub",
 			"options": "选项",
-			"target_crc": "目标 CRC"
+			"adb_cache": "ADB缓存",
+			"target_crc": "目标 CRC",
+			"mod_info": "关于 Mod 的判定"
 		},
 		"log_area": "日志",
 		"status_label": "状态：",
@@ -509,6 +648,7 @@
 				"modified_time": "修改时间",
 				"trailing_bytes": "尾部字节",
 				"trailing_content": "尾部内容",
+				"category": "类型",
 				"core": "Core",
 				"character": "角色名称",
 				"res_type": "资源类型",
@@ -555,6 +695,14 @@
 				"ends_with": "结尾是",
 				"regex": "正则匹配"
 			}
+		},
+		"adb_browser": {
+			"loading": "正在加载文件列表...",
+			"error": "加载失败: {error}",
+			"found": "扫描完成，共 {count} 个文件"
+		},
+		"anim_diff": {
+			"title": "动画缺失警告"
 		}
 	}
 }

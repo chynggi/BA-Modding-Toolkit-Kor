@@ -5,22 +5,52 @@ import threading
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 
 from .i18n import t
-from .utils import SpineUtils, ImageUtils, no_log
-from .naming import parse_filename
+from .utils import ImageUtils, no_log
+from .spine import (
+    SkelConverter, SpineViewer, atlas_downgrade,
+    check_legacy_rename_needed, normalize_legacy_assets,
+    unpack_atlas, RenderOptions, RENDER_PRESET_HIGH,
+)
 from .models import (
     NameTypeKey, FilePair, ProgressCallback,
     AssetKey, AssetContent, AssetType, Patch,
-    LogFunc, PatchResult,
-    MatchStrategy, SaveOptions, SpineOptions,
+    LogFunc, PatchResult, ReplaceAssetType,
+    MatchStrategy, SaveOptions, SkelConvertOptions, AnimCheckOptions,
+    AnimDiffMap, ModUpdateResult, BatchUpdateResult, SkelVersionConflict,
     REPLACEABLE_ASSET_TYPES
 )
 from .bundle import Bundle
-from .searching import find_target_bundles, search_prefix
+from .searching import find_target_bundles
+
+
+def _log_anim_diff_report(anim_diffs: dict[str, list[str]], log: LogFunc) -> None:
+    """输出动画缺失警告报告（仅在有差异时输出）"""
+    if not anim_diffs:
+        return
+    log("\n" + "!" * 50)
+    log(t("log.spine.anim_diff_title"))
+    for name, anims in anim_diffs.items():
+        log(f"   - {name} ({t('log.spine.anim_diff_item_count', count=len(anims))})")
+        log(f"     {t('log.spine.anim_diff_missing_list', animations=', '.join(anims))}")
+    log(t("log.spine.anim_diff_hint"))
+    log("!" * 50)
+
+
+def _format_skel_conflicts(conflicts: list[SkelVersionConflict]) -> str:
+    """将 skel 版本冲突列表格式化为终止消息（用于日志与弹窗）"""
+    target = conflicts[0].target_version
+    major_minor = ".".join(target.split(".")[:2])
+    lines = [t("message.spine.version_conflict_header", major_minor=major_minor)]
+    lines.extend(
+        t("message.spine.version_conflict_item", name=c.name, source=c.source_version or t("common.unknown"))
+        for c in conflicts
+    )
+    lines.append(t("message.spine.version_conflict_hint", major_minor=major_minor))
+    return "\n".join(lines)
 
 
 # ====== 资源处理相关 ======
@@ -28,7 +58,7 @@ from .searching import find_target_bundles, search_prefix
 def _extract_assets_from_bundle(
     bundle_paths: list[Path],
     work_dir: Path,
-    asset_types_to_extract: set[str],
+    asset_types_to_extract: set[ReplaceAssetType],
     log: LogFunc = no_log,
 ) -> dict[AssetType, list[Path]]:
     """
@@ -93,13 +123,15 @@ def _extract_assets_from_bundle(
     return extracted_files
 
 def process_asset_packing(
-    target_bundle_path: Path | list[Path],
-    assets: Path | list[Path],
+    target_bundle_path: list[Path],
+    assets: list[Path],
     output_dir: Path,
     save_options: SaveOptions,
-    spine_options: SpineOptions | None = None,
+    spine_options: SkelConvertOptions | None = None,
     enable_rename_fix: bool | None = False,
     enable_bleed: bool | None = False,
+    skip_unchanged: bool = True,
+    anim_check: AnimCheckOptions | None = None,
     log: LogFunc = no_log,
 ) -> tuple[bool, str, list[FilePair]]:
     """
@@ -113,23 +145,25 @@ def process_asset_packing(
     此函数将生成的文件保存在工作目录中，以便后续进行"覆盖原文件"操作。
     因为打包资源的操作在原理上是替换目标Bundle内的资源，因此里面可能有混用打包和替换的叫法。
     返回 (是否成功, 状态消息, (输出路径, 原始目标路径) 列表) 的元组。
-    
+
     Args:
-        target_bundle_path: 目标Bundle文件的路径，可以是单个路径或路径列表
-        assets: 包含待打包资源的文件列表，或文件夹
+        target_bundle_path: 目标Bundle文件的路径列表
+        assets: 包含待打包资源的文件夹或文件路径列表
         output_dir: 输出目录，用于保存生成的更新后文件
         save_options: 保存和CRC修正的选项
         spine_options: Spine资源升级的选项
         enable_rename_fix: 是否启用旧版 Spine 3.8 文件名修正
         enable_bleed: 是否对 PNG 文件进行 Bleed 处理
+        skip_unchanged: 是否跳过未变化的文件
         log: 日志记录函数，默认为空函数
     """
-    bundle_paths = [target_bundle_path] if isinstance(target_bundle_path, Path) else list(target_bundle_path)
-    asset_paths = [assets] if isinstance(assets, Path) else list(assets)
+    bundle_paths = list(target_bundle_path)
+    asset_paths = list(assets)
     temp_asset_folder = None
     try:
         # 1. 从所有资源路径中收集输入文件
         patch: Patch = {}
+        skel_conflicts: list[SkelVersionConflict] = []
         supported_extensions = {".png", ".skel", ".atlas", ".bytes"}
         input_files: list[Path] = []
         
@@ -142,15 +176,33 @@ def process_asset_packing(
                 input_files.append(asset_path)
 
         if enable_rename_fix and input_files:
-            # 将所有文件复制到临时目录，应用文件名修正
-            temp_dir = tempfile.mkdtemp(prefix="asset_pack_")
-            temp_path = Path(temp_dir)
-            for f in input_files:
-                shutil.copy2(f, temp_path / f.name)
-            temp_asset_folder = SpineUtils.normalize_legacy_spine_assets(temp_path, log)
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            input_files = [f for f in temp_asset_folder.iterdir()
-                          if f.is_file() and f.suffix.lower() in supported_extensions]
+            # 从目标 Bundle 中提取 Texture2D 名称作为重命名参考
+            bundle_png_names: set[str] = set()
+            for bp in bundle_paths:
+                bundle = Bundle.load(bp)
+                if bundle:
+                    for key in bundle.get_asset_keys(asset_types={AssetType.Texture2D}):
+                        if isinstance(key, NameTypeKey) and key.name:
+                            bundle_png_names.add(key.name)
+
+            if bundle_png_names:
+                # 将所有文件复制到临时目录
+                temp_dir = tempfile.mkdtemp(prefix="asset_pack_")
+                temp_path = Path(temp_dir)
+                for f in input_files:
+                    shutil.copy2(f, temp_path / f.name)
+
+                # 检测是否需要重命名
+                if check_legacy_rename_needed(temp_path, bundle_png_names):
+                    log(t('log.spine.legacy_rename_detected'))
+                    temp_asset_folder = normalize_legacy_assets(temp_path, bundle_png_names, log)
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    input_files = [f for f in temp_asset_folder.iterdir()
+                                  if f.is_file() and f.suffix.lower() in supported_extensions]
+                else:
+                    # 不需要重命名，直接使用临时目录
+                    input_files = [f for f in temp_path.iterdir()
+                                  if f.is_file() and f.suffix.lower() in supported_extensions]
 
         if not input_files:
             msg = t("message.packer.no_supported_files_found", extensions=', '.join(supported_extensions))
@@ -173,14 +225,15 @@ def process_asset_packing(
                     content = f.read()
                 
                 if file_path.suffix.lower() == '.skel':
-                    content = SpineUtils.handle_skel_upgrade(
+                    content, conflict = SkelConverter.ensure_version(
                         skel_bytes=content,
                         resource_name=asset_key.name,
-                        enabled=spine_options.enabled if spine_options else False,
-                        converter_path=spine_options.converter_path if spine_options else None,
-                        target_version=spine_options.target_version if spine_options else None,
+                        options=spine_options,
                         log=log
                     )
+                    if conflict:
+                        skel_conflicts.append(conflict)
+                        continue
             elif suffix == ".bytes" and file_path.name.endswith(".mesh.bytes"):
                 resource_name = file_path.name.removesuffix(".mesh.bytes")
                 asset_key = NameTypeKey(resource_name, AssetType.Mesh.name)
@@ -189,7 +242,13 @@ def process_asset_packing(
             else:
                 raise TypeError(f"Unsupported suffix: {suffix}")
             patch[asset_key] = content
-        
+
+        if skel_conflicts:
+            # skel 版本与预设目标版本不兼容：终止流程，不处理任何目标 Bundle（详情见失败消息）
+            log(f'❌ {t("log.spine.version_conflict_rejected", count=len(skel_conflicts))}')
+            msg = _format_skel_conflicts(skel_conflicts)
+            return False, msg, []
+
         original_tasks_count = len(patch)
         log(t("log.packer.found_files_to_process", count=original_tasks_count))
 
@@ -208,6 +267,7 @@ def process_asset_packing(
         file_pairs: list[FilePair] = []
         success_count = 0
         all_matched_keys: set[AssetKey] = set()
+        anim_diffs: dict[str, set[str]] = {}
 
         for i, bundle_path in enumerate(bundle_paths):
             if len(bundle_paths) > 1:
@@ -218,18 +278,27 @@ def process_asset_packing(
                 log(f"⚠️ {t('message.packer.load_target_bundle_failed')}: {bundle_path.name}")
                 continue
 
-            result = target_bundle.apply_patch(patch, strategy_name)
+            result = target_bundle.apply_patch(patch, strategy_name, anim_check)
 
-            if not result.is_success:
+            # 汇总动画差异
+            for name, anims in (result.anim_diffs or {}).items():
+                anim_diffs.setdefault(name, set()).update(anims)
+
+            # 判断是否应该保存此 bundle
+            should_save = result.is_success or not skip_unchanged
+
+            if not should_save:
                 log(f"⚠️ {t('common.warning')}: {t('log.packer.no_assets_packed')} ({bundle_path.name})")
-                log(t("log.packer.check_files_and_bundle"))
                 continue
 
-            log(f"✅ {t('log.migration.strategy_success', name=strategy_name, count=result.applied_count)}:")
-            for item in result.applied_logs:
-                log(f"  - {item}")
-
-            log(f'{t("log.packer.packing_complete", success=result.applied_count, total=original_tasks_count)}')
+            if result.is_success:
+                log(f"✅ {t('log.packer.strategy_success', strategy=strategy_name, count=result.applied_count)}:")
+                for item in result.applied_logs:
+                    log(f"  - {item}")
+                log(f'{t("log.packer.packing_complete", success=result.applied_count, total=original_tasks_count)}')
+            else:
+                # skip_unchanged=False 但没有匹配资源，保存未修改的 bundle
+                log(f"⏭️ {t('log.packer.no_changes_saved', name=bundle_path.name)}")
 
             all_matched_keys.update(result.matched_keys)
 
@@ -251,6 +320,9 @@ def process_asset_packing(
             for key in sorted(never_matched_keys):
                 log(f"  - {original_filenames.get(key, key)} ({t('log.packer.attempted_match', key=str(key))})")
 
+        # 3. 输出动画缺失警告报告
+        _log_anim_diff_report({k: sorted(v) for k, v in anim_diffs.items()}, log)
+
         if not file_pairs:
             return False, t("message.packer.no_matching_assets_to_pack"), []
 
@@ -270,9 +342,10 @@ def process_asset_packing(
 def process_asset_extraction(
     bundle_path: Path | list[Path],
     output_dir: Path,
-    asset_types_to_extract: set[str],
-    spine_options: SpineOptions | None = None,
-    unpack_atlas: bool = False,
+    asset_types_to_extract: set[ReplaceAssetType],
+    spine_options: SkelConvertOptions | None = None,
+    enable_unpack_atlas: bool = False,
+    scale_atlas: bool = False,
     log: LogFunc = no_log,
 ) -> tuple[bool, str]:
     """
@@ -335,7 +408,7 @@ def process_asset_extraction(
                 # 降级所有 skel 文件（直接覆盖到工作目录）
                 for skel_path in work_dir.glob("*.skel"):
                     log(f"  > {t('log.extractor.processing_file', name=skel_path.name)}")
-                    SpineUtils.process_skel_downgrade(
+                    SkelConverter.downgrade(
                         skel_path, work_dir,
                         spine_options.converter_path, spine_options.target_version, log
                     )
@@ -343,14 +416,14 @@ def process_asset_extraction(
                 # 降级所有 atlas 文件（直接覆盖到工作目录）
                 for atlas_path in work_dir.glob("*.atlas"):
                     log(f"  > {t('log.extractor.processing_file', name=atlas_path.name)}")
-                    SpineUtils.process_atlas_downgrade(atlas_path, work_dir, log)
+                    atlas_downgrade(atlas_path, work_dir, scale_atlas, log)
 
             # 2.2 Atlas解包处理
-            if unpack_atlas:
+            if enable_unpack_atlas:
                 log(f'\n--- {t("log.section.process_atlas_unpack")} ---')
 
                 for atlas_path in work_dir.glob("*.atlas"):
-                    SpineUtils.unpack_atlas_frames(atlas_path, output_dir, log)
+                    unpack_atlas(atlas_path, output_dir, log)
 
             # ========== 阶段 3: 输出文件 ==========
             # 将工作目录中剩余的文件复制到输出目录
@@ -375,8 +448,10 @@ def render_spine_preview_from_bundle(
     bundle_path: Path | list[Path],
     output_dir: Path,
     viewer_path: Path,
+    output_filename: str | None = None,
+    render_options: RenderOptions = RENDER_PRESET_HIGH,
     log: LogFunc = no_log,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[Path]]:
     """
     从 bundle 文件渲染 Spine 预览图。
 
@@ -384,20 +459,21 @@ def render_spine_preview_from_bundle(
         bundle_path: bundle 文件路径（单个或列表）
         output_dir: 输出目录
         viewer_path: SpineViewerCLI 路径
+        output_filename: 输出文件名（不含扩展名），用于自定义命名。None 则使用 skel 文件名
+        render_options: 渲染参数（默认高画质）
         log: 日志记录函数
 
     Returns:
-        tuple[bool, str]: (是否成功, 状态消息)
+        tuple[bool, str, list[Path]]: (是否成功, 状态消息, 渲染输出的文件路径列表)
     """
-    import tempfile
-    
+
     # 统一处理为列表
     bundle_paths = [bundle_path] if isinstance(bundle_path, Path) else bundle_path
 
     if not viewer_path.exists():
         msg = t("log.file.not_exist", path=viewer_path)
         log(f'❌ {msg}')
-        return False, msg
+        return False, msg, []
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -410,141 +486,68 @@ def render_spine_preview_from_bundle(
         extracted_files = _extract_assets_from_bundle(
             bundle_paths, work_dir, {"TextAsset", "Texture2D"}, log
         )
-        
-        # 获取 skel 和 atlas 文件
+
+        # 获取 skel 文件
         skel_files = [f for f in extracted_files[AssetType.TextAsset] if f.suffix == '.skel']
-        atlas_files = [f for f in extracted_files[AssetType.TextAsset] if f.suffix == '.atlas']
 
         if not skel_files:
             msg = t("log.spine.no_skel_found")
             log(f'⚠️ {msg}')
-            return True, msg
+            return False, msg, []
 
         # 阶段 2: 渲染预览图
         log(f'\n--- {t("log.section.render_preview")} ---')
         success_count = 0
+        rendered_paths: list[Path] = []
 
-        for skel_path in skel_files:
-            # 查找对应的 atlas 文件
-            atlas_path = None
-            for atlas in atlas_files:
-                if atlas.stem == skel_path.stem:
-                    atlas_path = atlas
-                    break
+        for idx, skel_path in enumerate(skel_files):
+            # 确定输出文件名
+            if output_filename:
+                # 如果指定了输出文件名，多个 skel 时添加后缀
+                if len(skel_files) > 1:
+                    filename = f"{output_filename}_{idx}"
+                else:
+                    filename = output_filename
+            else:
+                filename = skel_path.stem
 
-            # 查询动画信息
-            success, info = SpineUtils.query_spine_info(skel_path, viewer_path, atlas_path, log)
-            if not success:
-                continue
-
-            # 选择动画
-            animation = None
-            animations = info.get('animations', [])
-            if 'Idle_01' in animations:
-                animation = 'Idle_01'
-            elif 'Dummy' in animations:
-                animation = 'Dummy'
-            elif animations:
-                animation = animations[0]
-                log(f'  > {t("log.spine.using_first_animation", anim=animation)}')
-
-            if not animation:
-                log(f'  ⚠️ {t("log.spine.no_animation_found", name=skel_path.name)}')
-                continue
+            output_path = output_dir / f"{filename}.png"
 
             # 渲染预览图
-            output_path = output_dir / f"{skel_path.stem}.png"
-            success, msg = SpineUtils.render_spine_preview(
+            skel_success, msg = SpineViewer.render_preview(
                 skel_path=skel_path,
                 output_path=output_path,
                 viewer_path=viewer_path,
-                atlas_path=atlas_path,
-                animation=animation,
-                fmt="png",
+                render_options=render_options,
                 log=log
             )
 
-            if success:
+            if skel_success:
                 success_count += 1
+                rendered_paths.append(output_path)
 
         if success_count > 0:
             msg = t("log.spine.preview_complete", count=success_count)
             log(f'\n✓ {msg}')
-            return True, msg
+            return True, msg, rendered_paths
         else:
             msg = t("log.spine.preview_failed")
             log(f'\n❌ {msg}')
-            return False, msg
+            return False, msg, []
 
-def _migrate_bundle_assets(
-    old_bundle_path: Path,
-    new_bundle_path: Path,
-    asset_types_to_replace: set[str],
-    spine_options: SpineOptions | None = None,
-    log: LogFunc = no_log,
-) -> tuple[Bundle | None, PatchResult]:
-    """
-    执行asset迁移的核心替换逻辑。
-    返回一个元组 (modified_bundle, result)，如果失败则 modified_bundle 为 None。
-    """
-    # 1. 加载 bundles
-    log(t("log.migration.extracting_from_old_bundle", types=', '.join(asset_types_to_replace)))
-    old_bundle = Bundle.load(old_bundle_path, log)
-    if not old_bundle:
-        return None, PatchResult(0, 0, [], [], [])
-    
-    log(t("log.migration.loading_new_bundle"))
-    new_bundle = Bundle.load(new_bundle_path, log)
-    if not new_bundle:
-        return None, PatchResult(0, 0, [], [], [])
-
-    # 定义匹配策略
-    strategies: list[MatchStrategy] = ['path_id', 'cont_name_type', 'name_type']
-
-    for name in strategies:
-        log(f'\n{t("log.migration.trying_strategy", name=name)}')
-        
-        # 2. 根据当前策略从旧版 bundle 构建"替换清单"
-        log(f'  > {t("log.migration.extracting_from_old_bundle_simple")}')
-        old_assets_map = old_bundle.extract_patch(
-            asset_types_to_replace, name, spine_options
-        )
-        
-        if not old_assets_map:
-            log(f"  > ⚠️ {t('common.warning')}: {t('log.migration.strategy_no_assets_found', name=name)}")
-            continue
-
-        log(f'  > {t("log.migration.extraction_complete", name=name, count=len(old_assets_map))}')
-
-        # 3. 根据当前策略应用替换
-        log(f'  > {t("log.migration.writing_to_new_bundle")}')
-        
-        result = new_bundle.apply_patch(old_assets_map, name)
-        
-        # 4. 如果当前策略成功匹配了至少一个资源，就结束
-        if result.is_success:
-            log(f"\n✅ {t('log.migration.strategy_success', name=name, count=result.applied_count)}:")
-            for item in result.applied_logs:
-                log(f"  - {item}")
-            return new_bundle, result
-
-        log(f'  > {t("log.migration.strategy_no_match", name=name)}')
-
-    # 5. 所有策略都失败了
-    log(f"\n⚠️ {t('common.warning')}: {t('log.migration.all_strategies_failed', types=', '.join(asset_types_to_replace))}")
-    return None, PatchResult(0, 0, [], [], [])
 
 def process_mod_update(
     source_paths: list[Path],
     target_paths: list[Path],
     output_dir: Path,
-    asset_types_to_replace: set[str],
+    asset_types_to_replace: set[ReplaceAssetType],
     save_options: SaveOptions,
-    spine_options: SpineOptions | None = None,
+    spine_options: SkelConvertOptions | None = None,
     skip_unchanged: bool = False,
     match_strategy: MatchStrategy = 'path_id',
+    anim_check: AnimCheckOptions | None = None,
     log: LogFunc = no_log,
-) -> tuple[bool, str, list[FilePair]]:
+) -> ModUpdateResult:
     """
     自动化Mod更新流程 (N-to-N)。
     
@@ -565,22 +568,30 @@ def process_mod_update(
         log: 日志记录函数，默认为空函数
     
     Returns:
-        tuple[bool, str, list[FilePair]]: (是否成功, 状态消息, 文件对列表) 的元组
+        ModUpdateResult: 包含成功标志、状态消息、文件对列表及动画差异信息。
         文件对列表为 (输出文件路径, 原始目标文件路径) 的元组
-        如果skip_unchanged=True且所有资源都未变化，返回 (True, "unchanged", [])
+        如果skip_unchanged=True且所有资源都未变化，message 为 "unchanged"。
     """
     try:
         # 1. 提取资源 (Extraction)
         log(f'\n--- {t("log.section.extracting_patches")} ---')
         patches: Patch = {}
-        
+        skel_conflicts: list[SkelVersionConflict] = []
+
         for src in source_paths:
             src_bundle = Bundle.load(src, log)
             if not src_bundle:
                 continue
-            patch = src_bundle.extract_patch(asset_types_to_replace, match_strategy, spine_options)
+            patch, conflicts = src_bundle.extract_patch(asset_types_to_replace, match_strategy, spine_options)
             patches.update(patch)
-        
+            skel_conflicts.extend(conflicts)
+
+        if skel_conflicts:
+            # skel 版本与预设目标版本不兼容：整批终止，不处理任何目标
+            msg = _format_skel_conflicts(skel_conflicts)
+            log(f"❌ {msg}")
+            return ModUpdateResult(False, msg, [])
+
         if not patches:
             return False, t("message.mod_update.no_assets_extracted"), []
 
@@ -590,6 +601,7 @@ def process_mod_update(
         log(f'\n--- {t("log.section.applying_to_targets")} ---')
         file_pairs: list[FilePair] = []
         total_matched = 0  # 总匹配数（包括跳过的）
+        anim_diffs: dict[str, set[str]] = {}
 
         for tgt in target_paths:
             tgt_bundle = Bundle.load(tgt, log)
@@ -597,8 +609,12 @@ def process_mod_update(
                 log(f"  ❌ {t('message.load_failed')}: {tgt.name}")
                 continue
             
-            result = tgt_bundle.apply_patch(patches, match_strategy)
+            result = tgt_bundle.apply_patch(patches, match_strategy, anim_check)
             total_matched += result.matched_count
+
+            # 汇总动画差异
+            for name, anims in (result.anim_diffs or {}).items():
+                anim_diffs.setdefault(name, set()).update(anims)
             
             if skip_unchanged and result.applied_count == 0 and result.skipped_count > 0:
                 log(f"  ⏭️ {t('log.mod_update.target_unchanged', name=tgt.name, count=result.skipped_count)}")
@@ -614,31 +630,35 @@ def process_mod_update(
                     log(f"  ❌ {t('log.file.save_failed', path=output_path, error=save_message)}")
             else:
                 log(f"  > {t('log.file.no_changes_made')} ({tgt.name})")
-        
+
+        # 3. 归一化动画差异（按 skel 名排序）
+        final_anim_diffs: AnimDiffMap = {k: sorted(v) for k, v in anim_diffs.items()}
+
         if not file_pairs:
             # 区分：完全没有匹配 vs 匹配了但都被跳过
             if total_matched > 0 and skip_unchanged:
-                return True, "all_targets_unchanged", []
-            return False, t("message.mod_update.no_targets_processed"), []
+                return ModUpdateResult(True, "all_targets_unchanged", [], final_anim_diffs)
+            return ModUpdateResult(False, t("message.mod_update.no_targets_processed"), [], final_anim_diffs)
 
-        return True, t("message.mod_update.success"), file_pairs
+        return ModUpdateResult(True, t("message.mod_update.success"), file_pairs, final_anim_diffs)
 
     except Exception as e:
         log(f"\n❌ {t('common.error')}: {t('log.error_processing', error=e)}")
         log(traceback.format_exc())
-        return False, t("message.error_during_process", error=e), []
+        return ModUpdateResult(False, t("message.error_during_process", error=e), [])
 
 def _process_single_mod_update(
     mod_path: Path,
     search_paths: list[Path],
     output_dir: Path,
-    asset_types_to_replace: set[str],
+    asset_types_to_replace: set[ReplaceAssetType],
     save_options: SaveOptions,
-    spine_options: SpineOptions | None,
+    spine_options: SkelConvertOptions | None,
     skip_unchanged: bool,
     match_strategy: MatchStrategy,
-    log: LogFunc,
-) -> tuple[bool, str, list[FilePair]]:
+    anim_check: AnimCheckOptions | None = None,
+    log: LogFunc = no_log,
+) -> ModUpdateResult:
     """
     处理单个 mod 文件：查找目标 → 执行更新
 
@@ -651,10 +671,11 @@ def _process_single_mod_update(
         spine_options: Spine资源升级的选项
         skip_unchanged: 是否跳过未变化的文件
         match_strategy: 匹配策略
+        anim_check: 动画差异检测选项（启用开关与 SpineViewerCLI 路径）
         log: 日志记录函数
 
     Returns:
-        (success, message, file_pairs)
+        ModUpdateResult: 包含成功标志、状态消息、文件对列表及动画差异信息。
         - success=True, message="" 表示处理成功且有输出
         - success=True, message="unchanged" 表示内容未变化，无输出
         - success=False, message=错误信息 表示处理失败
@@ -663,9 +684,9 @@ def _process_single_mod_update(
 
     if not new_bundle_paths:
         log(f'  ❌ {t("log.search.find_failed", message=find_message)}')
-        return False, t("log.search.find_failed", message=find_message), []
+        return ModUpdateResult(False, t("log.search.find_failed", message=find_message), [])
 
-    success, process_message, update_file_pairs = process_mod_update(
+    result = process_mod_update(
         source_paths=[mod_path],
         target_paths=new_bundle_paths,
         output_dir=output_dir,
@@ -675,33 +696,35 @@ def _process_single_mod_update(
         log=log,
         skip_unchanged=skip_unchanged,
         match_strategy=match_strategy,
+        anim_check=anim_check,
     )
 
-    if success:
-        if process_message in ("unchanged", "all_targets_unchanged"):
+    if result.success:
+        if result.message in ("unchanged", "all_targets_unchanged"):
             log(f'  ⏭️ {t("log.batch.process_unchanged", filename=mod_path.name)}')
-            return True, "unchanged", []
+            return ModUpdateResult(True, "unchanged", [], result.anim_diffs)
         else:
             log(f'  ✅ {t("log.batch.process_success", filename=mod_path.name)}')
-            return True, "", update_file_pairs
+            return ModUpdateResult(True, "", result.file_pairs, result.anim_diffs)
     else:
-        log(f'  ❌ {t("log.batch.process_failed", filename=mod_path.name, message=process_message)}')
-        return False, process_message, []
+        log(f'  ❌ {t("log.batch.process_failed", filename=mod_path.name, message=result.message)}')
+        return ModUpdateResult(False, result.message, [], result.anim_diffs)
 
 
 def process_batch_mod_update(
     mod_file_list: list[Path],
     search_paths: list[Path],
     output_dir: Path,
-    asset_types_to_replace: set[str],
+    asset_types_to_replace: set[ReplaceAssetType],
     save_options: SaveOptions,
-    spine_options: SpineOptions | None,
+    spine_options: SkelConvertOptions | None,
     max_workers: int = 1,
     progress_callback: ProgressCallback | None = None,
     skip_unchanged: bool = False,
     match_strategy: MatchStrategy = 'path_id',
+    anim_check: AnimCheckOptions | None = None,
     log: LogFunc = no_log,
-) -> tuple[int, int, list[str], list[FilePair]]:
+) -> BatchUpdateResult:
     """
     执行批量Mod更新的核心逻辑。
 
@@ -720,8 +743,8 @@ def process_batch_mod_update(
         log: 日志记录函数。
 
     Returns:
-        tuple[int, int, list[str], list[FilePair]]: 
-            (成功计数, 失败计数, 失败任务详情列表, (输出文件路径, 被替换的原始文件路径) 元组列表)
+        BatchUpdateResult: 包含成功计数、失败计数、失败任务详情、文件对列表
+        （各为 (输出文件路径, 被替换的原始文件路径) 元组）及按 mod 分组的动画差异信息。
     """
     total_files = len(mod_file_list)
     success_count = 0
@@ -729,6 +752,14 @@ def process_batch_mod_update(
     unchanged_count = 0
     failed_tasks: list[str] = []
     file_pairs: list[FilePair] = []
+    anim_diffs: dict[str, set[str]] = {}
+
+    def record_diff(diff: AnimDiffMap | None) -> None:
+        """记录动画差异，按 skel 名合并去重"""
+        if not diff:
+            return
+        for skel, anims in diff.items():
+            anim_diffs.setdefault(skel, set()).update(anims)
 
     log("\n" + "=" * 50)
     log(f"📦 {t('log.batch.start')}")
@@ -746,7 +777,7 @@ def process_batch_mod_update(
             log("\n" + "=" * 50)
             log(t("status.processing_batch", current=current_progress, total=total_files, filename=filename))
 
-            success, message, pairs = _process_single_mod_update(
+            result: ModUpdateResult = _process_single_mod_update(
                 mod_path=old_mod_path,
                 search_paths=search_paths,
                 output_dir=output_dir,
@@ -755,18 +786,20 @@ def process_batch_mod_update(
                 spine_options=spine_options,
                 skip_unchanged=skip_unchanged,
                 match_strategy=match_strategy,
+                anim_check=anim_check,
                 log=log,
             )
+            record_diff(result.anim_diffs)
 
-            if success:
-                if message == "unchanged":
+            if result.success:
+                if result.message == "unchanged":
                     unchanged_count += 1
                 else:
                     success_count += 1
-                    file_pairs.extend(pairs)
+                    file_pairs.extend(result.file_pairs)
             else:
                 fail_count += 1
-                failed_tasks.append(f"{filename} - {message}")
+                failed_tasks.append(filename)
     else:
         # 并行处理
         lock = threading.Lock()
@@ -780,14 +813,14 @@ def process_batch_mod_update(
                     mod_path, search_paths, output_dir,
                     asset_types_to_replace, save_options,
                     spine_options, skip_unchanged,
-                    match_strategy, log,
+                    match_strategy, anim_check, log,
                 )
                 futures[future] = mod_path.name
 
             for future in as_completed(futures):
                 filename = futures[future]
                 try:
-                    success, message, pairs = future.result()
+                    result = future.result()
                 except Exception as e:
                     with lock:
                         fail_count += 1
@@ -796,18 +829,19 @@ def process_batch_mod_update(
                     log(t("log.batch.process_failed", filename=filename, message=str(e)))
                 else:
                     with lock:
-                        if success:
-                            if message == "unchanged":
+                        record_diff(result.anim_diffs)
+                        if result.success:
+                            if result.message == "unchanged":
                                 unchanged_count += 1
                                 log(t("log.batch.process_unchanged", filename=filename))
                             else:
                                 success_count += 1
-                                file_pairs.extend(pairs)
+                                file_pairs.extend(result.file_pairs)
                                 log(t("log.batch.process_success", filename=filename))
                         else:
                             fail_count += 1
-                            failed_tasks.append(f"{filename} - {message}")
-                            log(t("log.batch.process_failed", filename=filename, message=message))
+                            failed_tasks.append(f"{filename} - {result.message}")
+                            log(t("log.batch.process_failed", filename=filename, message=result.message))
                         completed += 1
 
                 if progress_callback:
@@ -829,348 +863,10 @@ def process_batch_mod_update(
         for task in failed_tasks:
             log(f'  - {task}')
 
-    return success_count, fail_count, failed_tasks, file_pairs
-
-
-def process_batch_legacy_batch(
-    legacy_file_list: list[Path],
-    search_paths: list[Path],
-    output_dir: Path,
-    asset_types_to_replace: set[str],
-    save_options: SaveOptions,
-    log: LogFunc = no_log,
-    progress_callback: Callable[[int, int, str], None] | None = None,
-    skip_unchanged: bool = False,
-) -> tuple[int, int, list[str], list[FilePair]]:
-    """
-    执行批量旧版国际服到新版国际服转换的核心逻辑。
-
-    Args:
-        legacy_file_list: 待转换的旧版国际服文件路径列表。
-        search_paths: 用于查找新版bundle文件的目录列表。
-        output_dir: 输出目录。
-        asset_types_to_replace: 需要替换的资源类型集合。
-        save_options: 保存和CRC修正的选项。
-        log: 日志记录函数。
-        progress_callback: 进度回调函数，用于更新UI。
-                           接收 (当前索引, 总数, 文件名)。
-        skip_unchanged: 是否跳过未变化的文件
-
-    Returns:
-        tuple[int, int, list[str], list[FilePair]]: 
-            (成功计数, 失败计数, 失败任务详情列表, (输出文件路径, 被替换的原始文件路径) 元组列表)
-    """
-    total_files = len(legacy_file_list)
-    success_count = 0
-    fail_count = 0
-    unchanged_count = 0
-    failed_tasks = []
-    file_pairs: list[FilePair] = []
-
-    log("\n" + "=" * 50)
-    log(f"📦 {t('log.batch.start')}")
-    log(f"  > {t('log.summary.total_files', count=total_files)}")
-
-    # 遍历每个旧版国际服文件
-    for i, legacy_file_path in enumerate(legacy_file_list):
-        current_progress = i + 1
-        filename = legacy_file_path.name
-        
-        if progress_callback:
-            progress_callback(current_progress, total_files, filename)
-
-        log("\n" + "=" * 50)
-        log(t("status.processing_batch", current=current_progress, total=total_files, filename=filename))
-
-        new_global_files, _ = search_prefix(legacy_file_path, search_paths, log)
-
-        if not new_global_files:
-            log(f'  ❌ {t("log.search.no_found")}')
-            fail_count += 1
-            failed_tasks.append(f"{filename} - {t('log.search.no_found')}")
-            continue
-
-        # 执行转换处理
-        success, process_message, result_file_pairs = process_legacy_to_modern_conversion(
-            legacy_bundle_path=legacy_file_path,
-            modern_bundle_paths=new_global_files,
-            output_dir=output_dir,
-            save_options=save_options,
-            asset_types_to_replace=asset_types_to_replace,
-            log=log,
-            skip_unchanged=skip_unchanged
-        )
-
-        if success:
-            if skip_unchanged and not result_file_pairs:
-                # 没有文件被实际替换（全部被跳过）
-                log(f'  ⏭️ {t("log.batch.process_unchanged", filename=filename)}')
-                unchanged_count += 1
-            else:
-                log(f'  ✅ {t("log.batch.process_success", filename=filename)}')
-                success_count += 1
-                file_pairs.extend(result_file_pairs)
-        else:
-            log(f'  ❌ {t("log.batch.process_failed", filename=filename, message=process_message)}')
-            fail_count += 1
-            failed_tasks.append(f"{filename} - {process_message}")
-
-    # 批量处理总结
-    log("\n" + "=" * 50)
-    log(f"📊 {t('log.batch.summary', total=total_files, success=success_count, fail=fail_count)}")
-
-    if unchanged_count > 0:
-        log(f"⏭️ {t('log.summary.skipped_files', count=unchanged_count)} ({t('log.summary.no_changes')})")
-
-    if file_pairs:
-        log(f'\n{t("log.batch.output_files_list", count=len(file_pairs))}')
-        for output_path, _ in file_pairs:
-            log(f'  - {output_path.name}')
-
-    if failed_tasks:
-        log(f'\n❌ {t("log.batch.failed_items_cnt", count=len(failed_tasks))}')
-        for task in failed_tasks:
-            log(f'  - {task}')
-
-    return success_count, fail_count, failed_tasks, file_pairs
-
-# ====== 日服处理相关 ======
-
-def process_modern_to_legacy_conversion(
-    legacy_bundle_path: Path,
-    modern_bundle_paths: list[Path],
-    output_dir: Path,
-    save_options: SaveOptions,
-    asset_types_to_replace: set[str],
-    log: LogFunc = no_log,
-) -> tuple[bool, str, FilePair | None]:
-    """
-    处理新版到旧版的转换。
-    将新版多个资源bundle中的资源，替换到旧版的bundle文件中对应的部分。
-    
-    Args:
-        legacy_bundle_path: 旧版bundle文件路径（作为基础）
-        modern_bundle_paths: 新版资源bundle文件路径列表
-        output_dir: 输出目录
-        save_options: 保存和CRC修正的选项
-        log: 日志记录函数
-    
-    Returns:
-        tuple[bool, str, FilePair | None]: (是否成功, 状态消息, (输出文件, 原始目标文件) 元组或None) 的元组
-    """
-    try:
-        log("="*50)
-        log(t("log.legacy_convert.starting_conversion"))
-        log(f'  > {t("log.legacy_convert.legacy_source_file", name=legacy_bundle_path.name)}')
-        log(f'  > {t("log.legacy_convert.modern_files_count", count=len(modern_bundle_paths))}')
-        
-        # 1. 从所有日服包中构建一个完整的"替换清单"
-        log(f'\n--- {t("log.section.extracting_patches")} ---')
-        patch: Patch = {}
-        strategy_name: MatchStrategy = 'cont_name_type'
-
-        total_files = len(modern_bundle_paths)
-        for i, jp_path in enumerate(modern_bundle_paths, 1):
-            log(t("log.processing_filename_with_progress", current=i, total=total_files, name=jp_path.name))
-            modern_bundle = Bundle.load(jp_path, log)
-            if not modern_bundle:
-                log(f"    > ⚠️ {t('message.load_failed')}: {jp_path.name}")
-                continue
-            
-            assets = modern_bundle.extract_patch(
-                asset_types_to_replace, strategy_name
-            )
-            patch.update(assets)
-
-        if not patch:
-            msg = t("message.legacy_convert.no_assets_in_source")
-            log(f"  > ⚠️ {msg}")
-            return False, msg, None
-        
-        log(f"  > {t('log.legacy_convert.extracted_count_from_jp', count=len(patch))}")
-
-        # 2. 加载国际服 base 并应用替换
-        log(f'\n--- {t("log.section.applying_to_global")} ---')
-        global_bundle = Bundle.load(legacy_bundle_path, log)
-        if not global_bundle:
-            return False, t("message.legacy_convert.load_legacy_failed"), None
-        
-        result = global_bundle.apply_patch(patch, strategy_name)
-        
-        if not result.is_success:
-            log(f"  > ⚠️ {t('log.legacy_convert.no_assets_replaced')}")
-            return False, t("message.legacy_convert.no_assets_matched"), None
-            
-        log(f"\n✅ {t('log.migration.strategy_success', name=strategy_name, count=result.applied_count)}:")
-        for item in result.applied_logs:
-            log(f"  - {item}")
-        
-        # 3. 保存最终文件
-        output_path = output_dir / legacy_bundle_path.name
-        save_ok, save_message = global_bundle.save(output_path, save_options)
-        
-        if not save_ok:
-            return False, save_message, None
-        
-        log(f"  ✅ {t('log.file.saved', path=output_path)}")
-        log(f"\n🎉 {t('log.legacy_convert.conversion_complete')}")
-        file_pair: FilePair = FilePair(output_path, legacy_bundle_path)
-        return True, t("message.legacy_convert.modern_to_legacy_success", asset_count=result.applied_count), file_pair
-        
-    except Exception as e:
-        log(f"\n❌ {t('common.error')}: {t('log.error_detail', error=e)}")
-        log(traceback.format_exc())
-        return False, t("message.legacy_convert.conversion_error", error=e), None
-        
-def process_legacy_to_modern_conversion(
-    legacy_bundle_path: Path,
-    modern_bundle_paths: list[Path],
-    output_dir: Path,
-    save_options: SaveOptions,
-    asset_types_to_replace: set[str],
-    log: LogFunc = no_log,
-    skip_unchanged: bool = False,
-) -> tuple[bool, str, list[FilePair]]:
-    """
-    处理旧版转新版的转换。
-
-    将一个旧版bundle文件，使用多个新版bundle作为模板，
-    将旧版bundle的资源分发替换到对应的新版文件中。
-    只替换模板中已存在的同名同类型资源。
-
-    Args:
-        legacy_bundle_path: 待转换的旧bundle文件路径。
-        modern_bundle_paths: 新版bundle文件路径列表（用作模板）。
-        output_dir: 输出目录。
-        save_options: 保存选项。
-        asset_types_to_replace: 要替换的资源类型集合。
-        log: 日志记录函数。
-        skip_unchanged: 是否跳过未变化的文件
-
-    Returns:
-        tuple[bool, str, list[FilePair]]: (是否成功, 状态消息, (输出文件, 原始目标文件) 元组列表) 的元组
-    """
-    # 结果收集器
-    output_files: list[tuple[str, int]] = []  # (文件名, 替换资源数)
-    skipped_files: list[str] = []  # 文件名列表
-    failed_files: list[tuple[str, str]] = []  # (文件名, 原因)
-
-    try:
-        log("="*50)
-        log(t("log.legacy_convert.starting_conversion"))
-        log(f'  > {t("log.legacy_convert.legacy_source_file", name=legacy_bundle_path.name)}')
-        log(f'  > {t("log.legacy_convert.modern_files_count", count=len(modern_bundle_paths))}')
-        
-        legacy_bundle = Bundle.load(legacy_bundle_path, log)
-        if not legacy_bundle:
-            return False, t("message.legacy_convert.load_legacy_failed"), []
-        
-        log(f'\n--- {t("log.section.extracting_patches")} ---')
-
-        # 定义匹配策略
-        strategies: list[MatchStrategy] = ['path_id', 'cont_name_type', 'name_type']
-
-        total_changes = 0
-        total_files = len(modern_bundle_paths)
-        file_pairs: list[FilePair] = []  # (输出文件, 原始目标文件)
-
-        # 2. 按顺序尝试每种策略
-        for strategy_name in strategies:
-            log(f'\n{t("log.migration.trying_strategy", name=strategy_name)}')
-
-            patch: Patch = legacy_bundle.extract_patch(
-                asset_types_to_replace, strategy_name
-            )
-
-            if not patch:
-                log(f"  > ⚠️ {t('common.warning')}: {t('log.migration.strategy_no_assets_found', name=strategy_name)}")
-                continue
-
-            log(f"  > {t('log.legacy_convert.extracted_count', count=len(patch))}")
-
-            strategy_success = False
-            strategy_total_changes = 0
-            current_output: list[tuple[str, int]] = []
-            current_skipped: list[str] = []
-            current_failed: list[tuple[str, str]] = []
-
-            # 3. 遍历每个日服模板文件进行处理
-            for i, modern_path in enumerate(modern_bundle_paths, 1):
-                log(t("log.processing_filename_with_progress", current=i, total=total_files, name=modern_path.name))
-
-                template_bundle = Bundle.load(modern_path, log)
-                if not template_bundle:
-                    log(f"  > ❌ {t('message.load_failed')}: {modern_path.name}")
-                    current_failed.append((modern_path.name, t('message.load_failed')))
-                    continue
-
-                result = template_bundle.apply_patch(patch, strategy_name)
-
-                if result.is_success:
-                    # 检查是否所有匹配的资源都未变化（只有skipped，没有实际替换）
-                    if skip_unchanged and result.applied_count == 0 and result.skipped_count > 0:
-                        log(f"  > ⏭️ {t('log.legacy_convert.file_unchanged', name=modern_path.name, count=result.skipped_count)}")
-                        current_skipped.append(modern_path.name)
-                        # 跳过也算作策略成功，避免继续尝试其他策略
-                        strategy_success = True
-                    else:
-                        log(f"  > ✅ {t('log.migration.strategy_success', name=strategy_name, count=result.applied_count)}")
-                        for item in result.applied_logs:
-                            log(f"    - {item}")
-
-                        output_path = output_dir / modern_path.name
-                        save_ok, save_msg = template_bundle.save(output_path, save_options)
-                        if save_ok:
-                            log(f"    ✅ {t('log.file.saved', path=output_path)}")
-                            total_changes += result.applied_count
-                            strategy_success = True
-                            strategy_total_changes += result.applied_count
-                            file_pairs.append(FilePair(output_path, modern_path))
-                            current_output.append((modern_path.name, result.applied_count))
-                        else:
-                            log(f"    ❌ {t('log.file.save_failed', path=output_path, error=save_msg)}")
-                            current_failed.append((modern_path.name, save_msg))
-                else:
-                    log(f"  > {t('log.file.no_changes_made')}")
-                    current_skipped.append(modern_path.name)
-
-            # 如果当前策略成功替换了至少一个资源，就结束
-            if strategy_success:
-                if strategy_total_changes == 0:
-                    # 所有文件都被跳过
-                    log(f"\n⏭️ {t('log.migration.strategy_skipped_unchanged', name=strategy_name)}")
-                else:
-                    log(f"\n✅ {t('log.migration.strategy_success', name=strategy_name, count=strategy_total_changes)}")
-                # 保存当前策略的结果
-                output_files = current_output
-                skipped_files = current_skipped
-                failed_files = current_failed
-                break
-
-        # 输出处理总结
-        log(f'\n--- {t("log.summary.title")} ---')
-        log(f"📊 {t('log.summary.total_files', count=total_files)}")
-
-        if output_files:
-            log(f"✅ {t('log.summary.output_files', count=len(output_files))}")
-            for name, count in output_files:
-                detail = t('log.summary.replaced_assets', count=count)
-                log(t('log.summary.output_item', name=name, detail=detail))
-
-        if skipped_files:
-            skip_reason = t('log.summary.no_changes')
-            log(f"⏭️ {t('log.summary.skipped_files', count=len(skipped_files))} ({skip_reason})")
-            for name in skipped_files:
-                log(t('log.summary.skipped_item', name=name))
-
-        if failed_files:
-            log(f"❌ {t('log.summary.failed_files', count=len(failed_files))}")
-            for name, reason in failed_files:
-                log(t('log.summary.failed_item', name=name, reason=reason))
-
-        return True, t("message.legacy_convert.legacy_to_modern_success", bundle_count=len(output_files), asset_count=total_changes), file_pairs
-
-    except Exception as e:
-        log(f"\n❌ {t('common.error')}: {t('log.error_detail', error=e)}")
-        log(traceback.format_exc())
-        return False, t("message.legacy_convert.conversion_error", error=e), []
+    return BatchUpdateResult(
+        success_count=success_count,
+        fail_count=fail_count,
+        failed_tasks=failed_tasks,
+        file_pairs=file_pairs,
+        anim_diffs={k: sorted(v) for k, v in anim_diffs.items()},
+    )

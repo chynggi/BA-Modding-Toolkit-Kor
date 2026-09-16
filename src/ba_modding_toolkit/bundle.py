@@ -11,14 +11,15 @@ from UnityPy.environment import Environment as Env
 from PIL import Image
 
 from .i18n import t
-from .utils import CRCUtils, SpineUtils, no_log
+from .utils import CRCUtils, no_log, throttle_progress
+from .spine import SkelConverter, check_skel_animation_diff
 from .naming import parse_filename
 from .models import (
     AssetKey, AssetContent, AssetType, Patch, KeyFunc,
     NameTypeKey, ContNameTypeKey, MatchStrategy, LogFunc,
-    CompressionType, PatchResult,
-    SaveOptions, SpineOptions, ParsedFilename,
-    BundleFileInfo, ProgressCallback,
+    CompressionType, PatchResult, ReplaceAssetType,
+    SaveOptions, SkelConvertOptions, AnimCheckOptions, ParsedFilename,
+    BundleFileInfo, ProgressCallback, SkelVersionConflict,
     REPLACEABLE_ASSET_TYPES
 )
 
@@ -293,15 +294,19 @@ class Bundle:
                 - "original": 保留原始压缩方式
                 - "none": 不进行压缩
         """
-        save_kwargs = {}
-        if compression == "original":
-            pass
-        elif compression == "none":
-            save_kwargs['packer'] = ""
+        if not compression or compression == "none":
+            packer = ""
+        elif compression == "original":
+            packer = "original"
+        elif compression == "lz4":
+            # UnityPy "lz4" uses 0xC2 (BlocksInfoAtTheEnd); use 0x42 so CRC tail is safe.
+            packer = (0x42, 2)
+        elif compression == "lzma":
+            packer = "lzma"
         else:
-            save_kwargs['packer'] = compression
-        
-        return self.env.file.save(**save_kwargs)
+            raise ValueError(f"Unsupported compression: {compression}")
+
+        return self.env.file.save(packer=packer)
     
     def save(self, output_path: Path, save_options: SaveOptions) -> tuple[bool, str]:
         """
@@ -359,7 +364,8 @@ class Bundle:
     def apply_patch(
         self,
         patch: Patch,
-        match_strategy: MatchStrategy = 'path_id'
+        match_strategy: MatchStrategy = 'path_id',
+        anim_check: AnimCheckOptions | None = None,
     ) -> PatchResult:
         """
         将补丁中的资源应用到当前的 bundle。
@@ -367,6 +373,7 @@ class Bundle:
         Args:
             patch: 资源补丁，格式为 { asset_key: content }。
             match_strategy: 匹配策略，用于从目标环境中的对象生成 asset_key。
+            anim_check: 动画差异检测选项（启用开关与 SpineViewerCLI 路径）
 
         Returns:
             PatchResult: 包含修改结果的数据类，包括实际修改数量、跳过数量、日志和未匹配键。
@@ -376,6 +383,7 @@ class Bundle:
         skipped_count = 0
         applied_assets_log = []
         matched_keys: list[AssetKey] = []
+        anim_diffs: dict[str, list[str]] = {}
         
         tasks = patch.copy()
         
@@ -401,7 +409,9 @@ class Bundle:
                     if obj.type == AssetType.Texture2D:
                         content: Image.Image
                         new_image = content
-                        if data.image.tobytes() == new_image.tobytes():
+                        if (data.image.mode == new_image.mode
+                                and data.image.size == new_image.size
+                                and data.image.tobytes() == new_image.tobytes()):
                             self.log(f'  ⏭️ {t("log.replace_skipped_same_content", type=obj.type.name, name=resource_name)}')
                             skipped_count += 1
                             continue
@@ -409,17 +419,35 @@ class Bundle:
                         data.save()
                     elif obj.type == AssetType.TextAsset:
                         content: bytes
-                        new_script = content.decode("utf-8", "surrogateescape")
-                        if data.m_Script == new_script:
+                        target_bytes = data.m_Script.encode("utf-8", "surrogateescape")
+
+                        if target_bytes == content:
                             self.log(f'  ⏭️ {t("log.replace_skipped_same_content", type=obj.type.name, name=resource_name)}')
                             skipped_count += 1
                             continue
-                        data.m_Script = new_script
+
+                        # 就地检测动画差异
+                        if anim_check and anim_check.is_valid() and resource_name.lower().endswith('.skel'):
+                            self.log(f"  🔍 {t('log.spine.anim_check_comparing', name=resource_name)}")
+                            missing_anims = check_skel_animation_diff(
+                                source_skel=content,
+                                target_skel=target_bytes,
+                                viewer_path=anim_check.viewer_path,
+                                log=self.log
+                            )
+                            if missing_anims:
+                                anim_diffs[resource_name] = missing_anims
+                                self.log(f"  ⚠️ {t('log.spine.anim_check_new_animations', name=resource_name, animations=', '.join(missing_anims))}")
+                            else:
+                                self.log(f"  ✓ {t('log.spine.anim_check_no_diff', name=resource_name)}")
+
+                        data.m_Script = content.decode("utf-8", "surrogateescape")
                         data.save()
                     else:
                         obj.set_raw_data(content)
                     
                     applied_count += 1
+                    self.log(f'  ✅ {t("log.replace_applied", type=obj.type.name, name=resource_name)}')
                     key_display = str(asset_key)
                     log_message = f"[{obj.type.name}] {resource_name} (key: {key_display})"
                     applied_assets_log.append(log_message)
@@ -434,28 +462,30 @@ class Bundle:
             skipped_count=skipped_count,
             applied_logs=applied_assets_log,
             unmatched_keys=list(tasks.keys()),
-            matched_keys=matched_keys
+            matched_keys=matched_keys,
+            anim_diffs=anim_diffs,
         )
     
     def extract_patch(
         self,
-        asset_types_to_replace: set[str],
+        asset_types_to_replace: set[ReplaceAssetType],
         match_strategy: MatchStrategy = 'path_id',
-        spine_options: SpineOptions | None = None
-    ) -> Patch:
+        spine_options: SkelConvertOptions | None = None
+    ) -> tuple[Patch, list[SkelVersionConflict]]:
         """
         从当前 Bundle 提取资源，生成补丁。
         
         Args:
             asset_types_to_replace: 要替换的资源类型集合（如 {"Texture2D", "TextAsset", "Mesh"} 或 {"ALL"}）
             match_strategy: 匹配策略，用于生成资源键
-            spine_options: Spine 资源升级选项
+            spine_options: Spine 资源版本检测与转换选项
             
         Returns:
-            资源补丁 { asset_key: content }
+            (资源补丁 { asset_key: content }, skel 版本冲突列表)
         """
         key_func = self._get_key_func(match_strategy)
         patch: Patch = {}
+        skel_conflicts: list[SkelVersionConflict] = []
         replace_all = "ALL" in asset_types_to_replace
         
         for obj in self.env.objects:
@@ -480,14 +510,15 @@ class Bundle:
                 elif obj.type == AssetType.TextAsset:
                     asset_bytes = data.m_Script.encode("utf-8", "surrogateescape")
                     if resource_name.lower().endswith('.skel'):
-                        content: bytes = SpineUtils.handle_skel_upgrade(
+                        content, conflict = SkelConverter.ensure_version(
                             skel_bytes=asset_bytes,
                             resource_name=resource_name,
-                            enabled=spine_options.enabled if spine_options else False,
-                            converter_path=spine_options.converter_path if spine_options else None,
-                            target_version=spine_options.target_version if spine_options else None,
+                            options=spine_options,
                             log=self.log
                         )
+                        if conflict:
+                            skel_conflicts.append(conflict)
+                            continue
                     else:
                         content: bytes = asset_bytes
                 elif replace_all or obj.type.name in asset_types_to_replace:
@@ -500,8 +531,8 @@ class Bundle:
         
         if replace_all:
             patch["__mode__"] = {"ALL"}
-        
-        return patch
+
+        return patch, skel_conflicts
 
 
 # -------- Bundle 分析器 --------
@@ -558,8 +589,10 @@ def analyze_bundles(
         return
 
     total = len(items)
+    # 节流进度回调，避免海量文件时的高频 GUI 更新
+    if progress_callback:
+        progress_callback = throttle_progress(progress_callback)
     for i, item in enumerate(items):
         for analyzer in analyzers:
             analyzer(item)
-        if progress_callback:
-            progress_callback(i + 1, total, item.path.name)
+        progress_callback(i + 1, total, item.path.name)

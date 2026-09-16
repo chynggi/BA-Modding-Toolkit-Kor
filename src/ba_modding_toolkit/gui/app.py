@@ -3,21 +3,50 @@
 import sys
 import tkinter as tk
 from tkinter import messagebox
-from typing import get_type_hints
+import urllib.request
+from dataclasses import dataclass, fields
 import ttkbootstrap as tb
 from pathlib import Path
-from ttkbootstrap.widgets.scrolled import ScrolledText 
 
 from ..i18n import i18n_manager, t, get_system_language, get_locale_dir
-from ..utils import get_environment_info, get_BA_path, parse_hex_bytes
-from ..models import SaveOptions, SpineOptions
+from ..utils import get_environment_info, get_version_info, parse_hex_bytes, EXE_DIR
+from ..models import SaveOptions, SkelConvertOptions, AnimCheckOptions
 from ..bundle import Bundle
-from .components import Theme, Logger, UIComponents
-from .utils import open_directory, select_directory
-from .configs import ConfigManager, ConfigMeta, ConfigMixin
+from ..adb import ADBManager, ADBFileIndex, ADBCache, ADBFileSource, LocalFileSource, FileSourceAdapter
+from ..naming import CharacterInternalIDMap
+from .components import Theme, Logger, UIComponents, create_log_area
+from .configs import ConfigManager, ConfigMixin
 from .windows import SettingsDialog, FileListWindow
-from .base_tab import TabFrame
 from .tabs import *
+
+
+@dataclass
+class Tabs:
+    """所有功能 Tab 的注册表，支持 app.tabs.<名称> 属性访问
+
+    字段名与 i18n 键 ui.tabs.<字段名> 一一对应，声明顺序即侧边栏显示顺序。
+    """
+    mod_update: ModUpdateTab
+    batch_update: BatchUpdateTab
+    crc_tool: CrcToolTab
+    asset_packer: AssetPackerTab
+    asset_extractor: AssetExtractorTab
+    adb_push: AdbPushTab
+    tools: ToolsTab
+
+    def with_titles(self) -> list[tuple[TabFrame, str]]:
+        """返回 (tab, 标题) 列表（顺序与字段声明顺序一致）"""
+        titles = [
+            t("ui.tabs.mod_update"),
+            t("ui.tabs.batch_update"),
+            t("ui.tabs.crc_tool"),
+            t("ui.tabs.asset_packer"),
+            t("ui.tabs.asset_extractor"),
+            t("ui.tabs.adb_push"),
+            t("ui.tabs.tools"),
+        ]
+        return [(getattr(self, f.name), title) for f, title in zip(fields(self), titles)]
+
 
 class App(tb.Frame, ConfigMixin):
     def __init__(self, master: tk.Tk):
@@ -26,26 +55,37 @@ class App(tb.Frame, ConfigMixin):
         self.setup_main_window()
         self.config_manager = ConfigManager(self.exe_dir / "config.toml")
         self.init_shared_variables()
+
+        # 角色映射表（配置加载后自动加载）
+        self.char_map = CharacterInternalIDMap()
+
         # 在创建UI组件前加载配置，确保语言设置正确
-        self.load_config_on_startup()  # 启动时加载配置
+        self.load_config_on_startup()
+
+        # 加载角色映射表
+        self._load_character_mapping()
+
         self.create_widgets()
         self.logger.status(t("status.ready"))
 
     def setup_main_window(self):
-        self.master.title(t("ui.app_title"))
-        self.master.geometry("700x888")
+        # 窗口标题带上版本号（如 "BA Modding Toolkit v1.2.3"）
+        version = get_version_info().get("version", "")
+        title = t("ui.app_title")
+        if version:
+            title += f" v{version}"
+        self.master.title(title)
+        self.master.geometry("800x1000")
 
         # 设置路径
-        if "__compiled__" in globals() and hasattr(__compiled__, "containing_dir"):
+        # exe_dir: 程序所在目录（打包后为 exe 目录，开发环境为项目根目录）
+        self.exe_dir = EXE_DIR
+        if "__compiled__" in globals():
             # 打包环境（nuitka onefile）
-            # __compiled__.containing_dir 为原始 exe 所在目录
-            self.exe_dir = Path(__compiled__.containing_dir).resolve()
             # root_path: nuitka 解压的资源目录（temp 目录下）
             self.root_path = Path(sys.executable).parent / "ba_modding_toolkit"
         else:
             # 开发环境
-            # exe_dir: 项目根目录 BA-Modding-Toolkit/
-            self.exe_dir = Path(__file__).parents[3]
             # root_path：src/ba_modding_toolkit/
             self.root_path = Path(__file__).parents[1]
 
@@ -60,40 +100,11 @@ class App(tb.Frame, ConfigMixin):
         if icon_path.exists():
             window.iconbitmap(icon_path)
 
-    def init_shared_variables(self):
-        """初始化所有配置变量 - 通过 Annotated 类型提示自动处理"""
-        self._config_specs: dict[str, ConfigMeta] = {}
-        
-        hints = get_type_hints(self.__class__, include_extras=True)
-        for var_name, hint in hints.items():
-            if not hasattr(hint, '__metadata__'):
-                continue
-            
-            var_type = hint.__origin__
-            meta: ConfigMeta = hint.__metadata__[0]
-            
-            var_instance = var_type()
-            setattr(self, var_name, var_instance)
-            self._config_specs[var_name] = meta
-            
-            default = meta.default() if callable(meta.default) else meta.default
-            var_instance.set(default)
-        
-        # 特殊处理：语言设置
-        self.language_var.set(i18n_manager.lang)
-        self.available_languages = i18n_manager.get_available_languages()
-
-    def _set_default_values(self):
-        """重置所有配置变量为默认值"""
-        hints = get_type_hints(self.__class__, include_extras=True)
-        for var_name, hint in hints.items():
-            if not hasattr(hint, '__metadata__'):
-                continue
-
-            meta: ConfigMeta = hint.__metadata__[0]
-            var = getattr(self, var_name)
-            default = meta.default() if callable(meta.default) else meta.default
-            var.set(default)
+    def _load_character_mapping(self):
+        """加载角色ID映射表 CSV"""
+        path = self.bacii_map_path_var.get().strip()
+        if path:
+            self.char_map.load(Path(path), index_column=self.character_index_column_var.get().strip())
 
     def create_widgets(self):
         # 使用grid布局确保status_widget固定在底部
@@ -121,7 +132,8 @@ class App(tb.Frame, ConfigMixin):
         paned_window.add(log_panel_frame, weight=0)
 
         # 创建日志区域（需要在侧边栏之前创建，因为侧边栏会创建Tab，Tab需要logger）
-        self.log_text = self.create_log_area(log_panel_frame)
+        self.log_scrolled_wrapper = create_log_area(log_panel_frame)
+        self.log_text = self.log_scrolled_wrapper.text
 
         # 底部状态栏 - 固定在窗口底部
         self.status_label = tb.Label(self.master, relief=tk.SUNKEN, padding=(5,0),
@@ -200,7 +212,7 @@ class App(tb.Frame, ConfigMixin):
             return False
         return Bundle.check_need_crc(target_path, log=self.logger.log)
 
-    def build_spine_options(self, upgrade_mode: bool = True) -> SpineOptions:
+    def build_spine_options(self, upgrade_mode: bool = True) -> SkelConvertOptions:
         """从全局配置构建 SpineOptions
 
         Args:
@@ -208,17 +220,24 @@ class App(tb.Frame, ConfigMixin):
         """
 
         if upgrade_mode:
-            return SpineOptions(
+            return SkelConvertOptions(
                 enabled=self.enable_spine_conversion_var.get(),
                 converter_path=Path(self.spine_converter_path_var.get()),
                 target_version=self.target_spine_version_var.get()
             )
         else:
-            return SpineOptions(
-                enabled=self.enable_atlas_downgrade_var.get(),
+            return SkelConvertOptions(
+                enabled=self.enable_spine_downgrade_var.get(),
                 converter_path=Path(self.spine_converter_path_var.get()),
                 target_version=self.spine_downgrade_version_var.get().strip()
             )
+
+    def build_anim_check_options(self) -> AnimCheckOptions:
+        """从全局配置构建动画差异检测选项"""
+        return AnimCheckOptions(
+            enabled=self.check_animations_var.get(),
+            viewer_path=Path(self.spine_viewer_path_var.get())
+        )
 
     def is_spine_converter_available(self) -> bool:
         """检查SpineConverter程序路径是否有效"""
@@ -227,10 +246,25 @@ class App(tb.Frame, ConfigMixin):
             return False
         return Path(path).exists()
 
+    def is_spine_viewer_available(self) -> bool:
+        """检查SpineViewerCLI程序路径是否有效"""
+        path = self.spine_viewer_path_var.get()
+        if not path:
+            return False
+        return Path(path).exists()
+
     def check_dependency(self, depends_on: str) -> bool:
         """检查依赖条件是否满足"""
         if depends_on == "spine_converter_path_var":
             return self.is_spine_converter_available()
+        if depends_on == "spine_viewer_path_var":
+            return self.is_spine_viewer_available()
+        if depends_on == "enable_spine_conversion_var":
+            # 同时检查 Spine 转换器路径和转换功能是否启用
+            return self.is_spine_converter_available() and self.enable_spine_conversion_var.get()
+        if depends_on == "enable_spine_downgrade_var":
+            # 同时检查 Spine 转换器路径和降级功能是否启用
+            return self.is_spine_converter_available() and self.enable_spine_downgrade_var.get()
         return True
 
     def get_depends_on_from_var(self, variable: tk.Variable) -> str | None:
@@ -269,31 +303,166 @@ class App(tb.Frame, ConfigMixin):
             parent
         )
 
-    def show_spine_viewer_download_guide(self):
+    def show_spine_viewer_not_configured(self, parent: tk.Widget | None = None) -> None:
+        """显示SpineViewer未配置提示"""
+        messagebox.showinfo(
+            t("common.tip"),
+            t("message.3rd_party.spine_viewer_required"),
+            parent=parent or self.master
+        )
+
+    def show_spine_viewer_download_guide(self, parent: tk.Widget | None = None) -> None:
         """显示SpineViewer下载引导对话框"""
         self.show_download_guide(
             "SpineViewerCLI",
             "https://github.com/ww-rm/SpineViewer",
-            parent=self
+            parent
         )
 
+    def show_adb_download_guide(self, parent: tk.Widget | None = None) -> None:
+        """显示ADB下载引导对话框"""
+        self.show_download_guide(
+            "ADB (Android Debug Bridge)",
+            "https://developer.android.com/studio/releases/platform-tools",
+            parent
+        )
 
-    def select_game_resource_directory(self):
-        select_directory(self.game_resource_dir_var, t("option.game_root_dir"), self.logger.log)
-        
-    def open_game_resource_in_explorer(self):
-        open_directory(self.game_resource_dir_var.get(), self.logger.log)
+    def download_BACII_map(self, parent: tk.Widget | None = None) -> None:
+        """下载角色ID映射表"""
+        url = "https://agent-0808.github.io/BA-characters-internal-id/data/students_data.csv"
+        save_path = self.exe_dir / "Addons" / "BA-Characters-Internal-ID.csv"
 
-    def select_output_directory(self):
-        select_directory(self.output_dir_var, t("option.output_dir"), self.logger.log)
+        if not messagebox.askyesno(
+            t("common.3rd_party"),
+            t("message.download_confirm", url=url, path=save_path),
+            parent=parent or self.master
+        ):
+            return
 
-    def open_output_dir_in_explorer(self):
-        open_directory(self.output_dir_var.get(), self.logger.log, create_if_not_exist=True)
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(url, save_path)
+            self.bacii_map_path_var.set(str(save_path))
+            self.logger.log(t("log.file.downloaded", path=save_path))
+            self._load_character_mapping()  # 下载后立即加载
+            messagebox.showinfo(t("common.success"), t("message.save_success"), parent=parent or self.master)
+        except Exception as e:
+            self.logger.log(t("log.error_detail", error=e))
+            messagebox.showerror(t("common.error"), t("message.save_error", error=e), parent=parent or self.master)
+
+    # --- 文件来源相关方法 ---
+
+    def get_current_resource_dir(self) -> str:
+        """根据文件来源获取当前资源目录"""
+        source = self.file_source_var.get()
+        if source == "windows_global":
+            return self.game_resource_dir_var.get()
+        elif source == "windows_japan":
+            return self.game_resource_dir_japan_var.get()
+        elif source == "adb_global":
+            return self.game_dir_android_global_var.get()
+        elif source == "adb_japan":
+            return self.game_dir_android_japan_var.get()
+        return ""
+
+    def get_current_server_region(self) -> str:
+        """根据文件来源获取区服"""
+        source = self.file_source_var.get()
+        if source in ("windows_global", "adb_global"):
+            return "global"
+        elif source in ("windows_japan", "adb_japan"):
+            return "japan"
+        return "global"
+
+    def is_adb_mode(self) -> bool:
+        """判断是否为ADB模式"""
+        source = self.file_source_var.get()
+        return source.startswith("adb_")
+
+
+    # --- ADB 相关方法 ---
+
+    def _init_adb(self):
+        """延迟初始化 ADB 组件"""
+        if hasattr(self, '_adb_manager') and self._adb_manager is not None:
+            return
+        self._adb_manager = ADBManager(adb_path=self.adb_path_var.get())
+        self._adb_index = ADBFileIndex(self._adb_manager)
+        cache_dir = self.adb_cache_dir_var.get()
+        if not cache_dir:
+            # 默认缓存路径：程序根目录/adb_cache
+            cache_dir = str(self.exe_dir / "adb_cache")
+            self.adb_cache_dir_var.set(cache_dir)
+        self._adb_cache = ADBCache(Path(cache_dir))
+        self._local_source = LocalFileSource()
+        # 尝试恢复上次选择的设备
+        saved_device = self.adb_device_var.get()
+        if saved_device:
+            self._adb_manager.select_device(saved_device)
+
+    def get_adb_manager(self) -> ADBManager:
+        """获取 ADB 管理器（延迟初始化）"""
+        self._init_adb()
+        return self._adb_manager
+
+    def get_adb_file_source(self, server_region: str | None = None) -> ADBFileSource:
+        """获取 ADB 文件源适配器（延迟初始化）。
+
+        Args:
+            server_region: 指定区服；为 None 时使用当前文件来源对应的区服。
+                设置页中浏览 ADB 目录时需显式指定区服，不受当前文件来源影响。
+        """
+        self._init_adb()
+        region = server_region or self.get_current_server_region()
+        # 读取用户配置的 ADB 目录，传递给 ADBFileSource 使其生效
+        if region == "japan":
+            custom_base = self.game_dir_android_japan_var.get()
+        else:
+            custom_base = self.game_dir_android_global_var.get()
+        return ADBFileSource(
+            adb_manager=self._adb_manager,
+            file_index=self._adb_index,
+            cache=self._adb_cache,
+            server_region=region,
+            custom_base_path=custom_base,
+        )
+
+    def get_adb_cache(self) -> ADBCache:
+        """获取 ADB 缓存管理器（延迟初始化）"""
+        self._init_adb()
+        return self._adb_cache
+
+    def get_local_file_source(self) -> LocalFileSource:
+        """获取本地文件源适配器"""
+        self._init_adb()
+        return self._local_source
+
+    def get_file_source(self, source: str = "local") -> FileSourceAdapter:
+        """根据来源标识获取文件源适配器"""
+        if source == "adb":
+            return self.get_adb_file_source()
+        return self.get_local_file_source()
+
+    def is_adb_available(self) -> bool:
+        """检查 ADB 是否可用（已连接设备）"""
+        self._init_adb()
+        return self._adb_manager.is_connected
+
+    def refresh_adb_connection(self):
+        """刷新 ADB 连接状态"""
+        self._init_adb()
+        # 同步 adb_path 配置
+        self._adb_manager.adb_path = self.adb_path_var.get()
+        saved_device = self.adb_device_var.get()
+        if saved_device:
+            self._adb_manager.try_reconnect(saved_device)
 
     # 输出子目录常量
     OUTPUT_SUBDIR_BUNDLES = "bundles"
     OUTPUT_SUBDIR_EXTRACT = "extract"
     OUTPUT_SUBDIR_PREVIEW = "preview"
+    OUTPUT_SUBDIR_REPORTS = "reports"
+    OUTPUT_SUBDIR_BATCH_PREVIEW = "batch_preview"
 
     def get_output_subdir(self, subdir: str) -> Path:
         """获取输出目录下的子目录路径，自动创建"""
@@ -309,8 +478,8 @@ class App(tb.Frame, ConfigMixin):
         # 如果没有配置文件，根据系统语言检测设置默认语言
         if not config_loaded:
             system_lang = get_system_language()
-            # 如果系统语言是中文，使用zh-CN，否则使用debug模式
-            if system_lang and (system_lang.startswith("zh-")):
+            # 如果系统语言是中文，使用zh-CN，否则使用en-US
+            if system_lang and system_lang.startswith("zh-"):
                 default_language = "zh-CN"
             else:
                 default_language = "en-US"
@@ -318,12 +487,6 @@ class App(tb.Frame, ConfigMixin):
             self.language_var.set(default_language)
             print(f"未找到配置文件，根据系统语言检测使用默认语言: {default_language}")
             
-            # 尝试从注册表检测 Blue Archive 游戏路径
-            ba_path = get_BA_path()
-            if ba_path:
-                self.game_resource_dir_var.set(ba_path)
-                print(f"从注册表检测到 Blue Archive 安装路径: {ba_path}")
-        
         # 设置语言
         language = self.language_var.get()
         i18n_manager.set_language(language)
@@ -332,14 +495,15 @@ class App(tb.Frame, ConfigMixin):
         if config_loaded:
             print(f"配置加载成功，语言设置为: {language}")
     
-    def save_current_config(self):
+    def save_current_config(self, parent: tk.Misc | None = None):
         """保存当前配置到文件"""
         if self.config_manager.save_config(self):
+            self._load_character_mapping()  # 映射表路径/索引列变更后重新加载
             self.logger.log(t("log.config.saved"))
-            messagebox.showinfo(t("common.success"), t("message.config.saved"))
+            messagebox.showinfo(t("common.success"), t("message.config.saved"), parent=parent)
         else:
             self.logger.log(t("log.config.save_failed"))
-            messagebox.showerror(t("common.error"), t("message.config.save_failed"))
+            messagebox.showerror(t("common.error"), t("message.config.save_failed"), parent=parent)
 
     
     def create_sidebar_layout(self, parent):
@@ -364,40 +528,29 @@ class App(tb.Frame, ConfigMixin):
         self.create_sidebar_buttons()
         
         # 默认显示第一个Tab
-        if self.tabs:
-            self.show_tab(self.tabs[0])
-    
+        self.show_tab(self.tabs.mod_update)
+
     def populate_tabs(self):
         """创建并添加所有的Tab页面到内容区域。"""
-        self.tabs: list[tuple[TabFrame, str]] = []
+        # 创建Tab页面（声明顺序即侧边栏顺序）
+        self.tabs: Tabs = Tabs(
+            mod_update=ModUpdateTab(self.content_frame, self),
+            batch_update=BatchUpdateTab(self.content_frame, self),
+            crc_tool=CrcToolTab(self.content_frame, self),
+            asset_packer=AssetPackerTab(self.content_frame, self),
+            asset_extractor=AssetExtractorTab(self.content_frame, self),
+            adb_push=AdbPushTab(self.content_frame, self),
+            tools=ToolsTab(self.content_frame, self),
+        )
 
-        # 创建Tab页面
-        mod_update_tab = ModUpdateTab(self.content_frame, self)
-        batch_update_tab = BatchUpdateTab(self.content_frame, self)
-        batch_legacy_tab = BatchLegacyTab(self.content_frame, self)
-        crc_tool_tab = CrcToolTab(self.content_frame, self)
-        asset_packer_tab = AssetPackerTab(self.content_frame, self)
-        asset_extractor_tab = AssetExtractorTab(self.content_frame, self)
-        legacy_conversion_tab = LegacyConversionTab(self.content_frame, self)
-        
-        self.tabs.extend([
-            (mod_update_tab, t("ui.tabs.mod_update")),
-            (batch_update_tab, t("ui.tabs.batch_update")),
-            (crc_tool_tab, t("ui.tabs.crc_tool")),
-            (asset_packer_tab, t("ui.tabs.asset_packer")),
-            (asset_extractor_tab, t("ui.tabs.asset_extractor")),
-            (legacy_conversion_tab, t("ui.tabs.legacy_conversion")),
-            (batch_legacy_tab, t("ui.tabs.batch_legacy")),
-        ])
-        
         # 将所有Tab放置在content_frame的同一位置
-        for tab, _ in self.tabs:
+        for tab, _ in self.tabs.with_titles():
             tab.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     
     def create_sidebar_buttons(self):
         """创建侧边栏导航按钮"""
         self.tab_buttons: list[tuple[tb.Button, TabFrame]] = []
-        for tab, title in self.tabs:
+        for tab, title in self.tabs.with_titles():
             btn = UIComponents.create_button(
                 self.sidebar_frame,
                 text=title,
@@ -435,15 +588,12 @@ class App(tb.Frame, ConfigMixin):
         )
         settings_btn.pack(fill=tk.X, padx=5, pady=(5,0))
     
-    def show_tab(self, tab_to_show):
+    def show_tab(self, tab_to_show: TabFrame):
         """显示指定的Tab页面"""
-        # 如果传入的是元组，提取tab对象
-        if isinstance(tab_to_show, tuple):
-            tab_to_show = tab_to_show[0]
         assert(isinstance(tab_to_show, TabFrame))
 
         # 隐藏所有Tab
-        for tab, _ in self.tabs:
+        for tab, _ in self.tabs.with_titles():
             tab.pack_forget()
         
         # 显示目标Tab
@@ -455,43 +605,3 @@ class App(tb.Frame, ConfigMixin):
                 btn.config(bootstyle="primary")  # 激活状态使用更亮的样式
             else:
                 btn.config(bootstyle="secondary")  # 非激活状态使用稍浅样式，比侧边栏背景稍浅
-    
-    def create_log_area(self, parent):
-        """
-        创建日志区域，使用自定义的深色风格
-        """
-        # 创建外层容器（带标题的边框）
-        log_frame = tb.Labelframe(
-            parent, 
-            text=t("ui.log_area"), 
-            bootstyle="default",
-            padding=(5, 0)
-        )
-        log_frame.pack(fill=tk.BOTH, expand=True)
-
-        # 使用 ttkbootstrap 的 ScrolledText (带自动隐藏的滚动条)
-        st = ScrolledText(
-            log_frame,
-            padding=0,
-            height=8,
-            autohide=True,            # 自动隐藏滚动条
-            bootstyle="round" # 滚动条样式
-        )
-        st.pack(fill=tk.BOTH, expand=True)
-
-        # 这里直接操作 st.text (内部的 Text 组件) 来修改颜色
-        st.text.configure(
-            font=Theme.LOG_FONT,
-            background=Theme.LOG_BG,
-            foreground=Theme.LOG_FG,
-            selectbackground=Theme.LOG_SELECTED, # 选中时的背景色
-            insertbackground=Theme.LOG_FG,  # 光标颜色
-            state=tk.DISABLED,              # 初始设为不可编辑
-            spacing1=2,                     # 段前间距（像素）
-        )
-
-        # 保存引用以防被垃圾回收（虽然在 pack 后通常不需要）
-        self.log_scrolled_wrapper = st
-
-        # 返回内部的 Text 组件，这样你现有的 Logger 类无需修改即可直接使用
-        return st.text

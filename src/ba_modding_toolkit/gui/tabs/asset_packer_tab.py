@@ -6,19 +6,21 @@ from tkinter import messagebox
 from pathlib import Path
 
 from ...i18n import t
-from ...models import FileType
+from ...models import FileType, FilePair
 from ... import core
-from ...searching import search_core, get_search_dirs
-from ..base_tab import TabFrame
+from ...searching import search_core, search_core_remote, get_search_dirs
 from ..components import DropZone, SettingRow, UIComponents, FileListbox
 from ..utils import confirm_and_replace
+from .base_tab import TabFrame
 
 class AssetPackerTab(TabFrame):
     def create_widgets(self):
         self.bundle_paths: list[Path] = []
         self.asset_paths: list[Path] = []
-        self.current_file_pairs: list[tuple[Path, Path]] = []
-        
+        self.current_file_pairs: list[FilePair] = []
+        self._adb_remote_target_paths: list[str] = []  # ADB 模式下目标的远程路径
+        self._search_path_var = tk.StringVar(value=self.app.get_current_resource_dir())
+
         # 资源文件列表
         self.assets_listbox = FileListbox(
             self, title=t("ui.label.assets_to_pack"),
@@ -35,10 +37,15 @@ class AssetPackerTab(TabFrame):
         self.bundle_zone = DropZone(
             self, title=t("ui.label.target_bundle_file"),
             placeholder_text=t("ui.packer.placeholder_bundle"),
+            app=self.app,
             on_files_selected=self.on_bundles_selected,
             file_types=[FileType.BUNDLE, FileType.ALL],
-            logger=self.logger
+            search_path_var=self._search_path_var,
+            logger=self.logger,
         )
+
+        # 绑定文件来源变化事件
+        self.bind_all("<<FileSourceChanged>>", self._on_file_source_changed, add=True)
         
         # 旧版 Spine 文件名修正选项
         options_frame = tb.Labelframe(self, text=t("ui.label.options"), padding=10)
@@ -69,6 +76,14 @@ class AssetPackerTab(TabFrame):
         self.replace_button = UIComponents.create_button(action_button_frame, t("action.replace_original"), self.replace_original_thread, bootstyle="danger", state="disabled", style="large")
         self.replace_button.grid(row=0, column=1, sticky="ew", padx=(5, 0), pady=10)
 
+    def _on_file_source_changed(self, event=None):
+        """文件来源变化时更新搜索路径"""
+        self._search_path_var.set(self.app.get_current_resource_dir())
+        # 清空已选择的目标文件和远程路径
+        self.bundle_paths = []
+        self._adb_remote_target_paths = []
+        self.bundle_zone.clear()
+
     def on_bundles_selected(self, paths: list[Path]):
         """Bundle 文件选中后的处理"""
         self.bundle_paths = paths
@@ -88,15 +103,51 @@ class AssetPackerTab(TabFrame):
         self.master.after(0, lambda: self.bundle_zone.set_searching())
         self.logger.status(t("status.processing_detailed"))
 
-        search_dirs = get_search_dirs(Path(self.app.game_resource_dir_var.get()))
-        candidates, _ = search_core(self.asset_paths[0], search_dirs, self.logger.log)
+        if self.app.is_adb_mode():
+            self._auto_search_target_bundles_adb()
+        else:
+            self._auto_search_target_bundles_local()
 
+    def _auto_search_target_bundles_local(self):
+        """本地模式搜索目标 bundle"""
+        search_dirs = get_search_dirs(Path(self.app.get_current_resource_dir()))
+        candidates, _ = search_core(self.asset_paths[0], search_dirs, self.logger.log)
+        self._adb_remote_target_paths = []  # 清空远程路径
         self.master.after(0, lambda: self._handle_search_result(candidates))
 
-    def _handle_search_result(self, found_paths: list[Path]):
+    def _auto_search_target_bundles_adb(self):
+        """ADB 模式搜索目标 bundle"""
+        adb_source = self.app.get_adb_file_source()
+        if not adb_source.is_available():
+            self.master.after(0, lambda: self.bundle_zone.set_error(t("message.adb.not_connected")))
+            return
+
+        search_dirs = adb_source.get_search_dirs()
+        remote_candidates, message = search_core_remote(
+            self.asset_paths[0], search_dirs, adb_source, self.logger.log
+        )
+
+        if not remote_candidates:
+            self.master.after(0, lambda: self._handle_search_result([], message))
+            return
+
+        # 将远程路径缓存到本地
+        local_paths: list[Path] = []
+        for remote_path in remote_candidates:
+            try:
+                local_path = adb_source.ensure_local(remote_path)
+                local_paths.append(local_path)
+            except Exception as e:
+                self.logger.log(t("log.adb.pull_failed", path=remote_path, error=e))
+
+        self._adb_remote_target_paths = remote_candidates
+        self.master.after(0, lambda: self._handle_search_result(local_paths, message))
+
+    def _handle_search_result(self, found_paths: list[Path], message: str = ""):
         """处理自动搜索结果"""
         if not found_paths:
-            self.bundle_zone.set_error(t("message.search.no_matching_files_in_dir"))
+            error_msg = message or t("message.search.no_matching_files_in_dir")
+            self.bundle_zone.set_error(error_msg)
             self.logger.status(t("status.search_not_found"))
         elif len(found_paths) == 1:
             self.bundle_paths = found_paths
@@ -137,6 +188,8 @@ class AssetPackerTab(TabFrame):
             spine_options = spine_options,
             enable_rename_fix = self.app.enable_spine38_namefix_var.get(),
             enable_bleed = self.app.enable_bleed_var.get(),
+            skip_unchanged = self.app.skip_unchanged_var.get(),
+            anim_check=self.app.build_anim_check_options(),
             log = self.logger.log
         )
         

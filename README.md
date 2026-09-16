@@ -27,10 +27,10 @@ Supports Steam version (PC) and other versions (Global/JP server, PC/Android/iOS
 
 - Downloaded a mod from the internet, replaced the corresponding file in the game directory, but the game shows "Abnormal Client" and cannot login?
 - Downloaded a mod released a long time ago, but the filename is different from the latest version? Even after replacement, the character image doesn't change/doesn't display at all/game freezes?
-- Want to create your own mod to replace character illustrations, but don't have Unity knowledge?
-- Want to unpack game resources and extract character illustrations or other assets?
+- Want to create your own mod to replace character illustrations, but don't know how to operate?
+- Want to extract character illustrations or other assets?
 
-BA Modding Toolkit can help you solve the above problems, with completely foolproof operations, no need to manually manipulate bundle files.
+BA Modding Toolkit can help you solve the above problems, with foolproof operations, no need to manually manipulate bundle files.
 
 ## Getting Started
 
@@ -48,9 +48,11 @@ The program contains multiple functionalities:
 - **CRC Tool**: CRC checksum calculation and correction functionality
 - **Asset Packer**: Pack asset files from a folder into a Bundle file, replacing the corresponding assets in the Bundle
 - **Asset Extractor**: Extract specified types of assets from Bundle files
-- **Legacy Conversion**: Convert between Legacy format(old global version) and Modern format(JP and new global version)
-- **Batch Legacy**: Batch convert Legacy format to Modern format
-
+- **Tools**
+  - Generate Mod Report：Generate a report of all Mod files in the game directory.
+  - Fix Abnormal Client：Fix the "abnormal client" issue.
+  - Backup Mods：Backup all Mod files in the game directory.
+- **ADB File Push**: Push local files to Android devices using ADB commands.
 - **File List**: View and manage all Bundle files in the specified directory.
 
 ![How to update a mod with BAMT GUI](docs/help/gui-help-mod-update-en.png)
@@ -61,6 +63,7 @@ The add-ons mentioned in this section are optional, and you can choose whether t
 
 > [!WARNING]
 > The following add-ons are independent third-party programs. Please comply with their licenses when downloading and using them.
+> 
 > BA-Modding-Toolkit only invokes the programs through `subprocess` module. It does not contain or distribute any code or files of these programs, nor is it responsible for any issues that may arise during their use.
 
 ### Spine Skeleton Data Converter
@@ -80,7 +83,37 @@ Configure the path of the `SpineSkeletonDataConverter.exe` program in the settin
 
 **[ww-rm/SpineViewer](https://github.com/ww-rm/SpineViewer)**
 
-This tool can preview and render Spine skeleton animation files. You can configure the path of the `SpineViewerCLI.exe` program in the settings interface and preview the Spine animation in the "File List" window.
+This tool can parse and render Spine `.skel` animation files. You can configure the path to `SpineViewerCLI.exe` in the Settings interface for use by this program.
+
+- Right-click to preview in the "File List" window
+- In the Asset Extractor tab, you can optionally render preview images after extraction.
+- In the "Mod Report" feature, you can optionally render preview images when generating the report.
+- It can be used to detect differences in `.skel` animation lists, and is used in the "Mod Update" and "Asset Packer" features.
+
+### ADB (Android Debug Bridge)
+
+**[Android Debug Bridge](https://developer.android.com/tools/releases/platform-tools)**
+
+This tool can communicate with Android devices. You can configure the path of `adb.exe` in the settings interface to directly read and write files on Android devices in the same way as local files on Windows, without manually exporting or importing files from Android devices.
+
+- This feature requires an Android device to be connected and authorized for this program to access.
+- After setting the path to `adb.exe`, select the target Android device and corresponding file source in the "Settings" window.
+
+## Subproject
+
+### BA-characters-internal-id
+
+**[Agent-0808/BA-characters-internal-id](https://github.com/Agent-0808/BA-characters-internal-id)**
+
+A reference table that records the mapping between in-game character names and their corresponding internal file IDs (e.g., `CH0288` → Utsumi Aoba).
+
+- In various features, after parsing the Bundle file name to obtain the internal ID, the actual character name can be displayed based on this lookup table.
+- It is also used to display character names based on internal character IDs when generating Mod reports.
+
+> [!NOTE]
+> The packaged version downloaded from Releases already includes a copy of the data file (`BA-Characters-Internal-ID.csv`) in the `Addons/` subdirectory next to the executable, ready to use out of the box. You can also download the latest version manually in the Settings interface.
+>
+> The data file is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/legalcode) (see `Addons/BA-Characters-Internal-ID-LICENSE.txt` for the full notice). The data is compiled from the text data of [KivoWiki](https://kivo.wiki) and is used in this program only for fair purposes such as displaying character names.
 
 ## Command Line Interface (CLI)
 
@@ -96,39 +129,23 @@ All operations can be executed via the `bamt-cli` command. You can use `--help` 
 # View all available commands
 bamt-cli -h
 
+# View environment information
+bamt-cli env
+
 # View detailed help and examples for a specific command
 bamt-cli update -h
 bamt-cli batch-update -h
-bamt-cli merge -h
-bamt-cli split -h
-bamt-cli batch-legacy -h
 bamt-cli pack -h
 bamt-cli extract -h
 bamt-cli crc -h
-
-# View environment information
-bamt-cli env
+bamt-cli report -h
+bamt-cli backup -h
 ```
 
 > [!NOTE]
 > Due to the technical limitation of the `Tap` library, the compiled binary file cannot display parameter variable annotations. When running the source code, the parameter variable annotations will be displayed in the help information.
 
 Check the [CLI Usage](https://github.com/Agent-0808/BA-Modding-Toolkit/wiki/CLI-Usage-&-Arguments) Page for Complete Usage Instructions.
-
-## Technical Details
-
-### Tested Environments
-
-The table below lists tested environment configurations for reference.
-
-| Operating System | Python | UnityPy | Pillow | Status | Note   |
-|:------------------- |:-------------- |:--------------- |:-------------- |:------ | :--- |
-| Windows 10          | 3.12.4         | 1.23.0     | 12.0.0    | ✅   | Dev Env |
-| Windows 10          | 3.11.x         | 1.23.0     | 12.0.0    | ✅   |  |
-| Windows 10          | 3.12.4         | 1.23.0     | 10.4.0    | ✅   |  |
-| Windows 10          | 3.13.7         | 1.23.0     | 11.3.0    | ✅   |  |
-| Windows 10          | 3.12.4         | 1.24.0     | 10.4.0    | ❌   |  |
-| Ubuntu 22.04 (WSL2) | 3.13.10        | 1.23.0     | 12.0.0    | ✅   |  |
 
 ## Developing
 
@@ -153,6 +170,19 @@ You can add `BA-Modding-Toolkit` code to your project or modify the existing cod
 
 `cli/main.py` is a command-line interface (CLI) version of the main program, which you can refer to for calling processing functions.
 
+### Tested Environments
+
+The table below lists tested environment configurations for reference.
+
+| Operating System | Python | UnityPy | Pillow | Status | Note   |
+|:------------------- |:-------------- |:--------------- |:-------------- |:------ | :--- |
+| Windows 10          | 3.12.4         | 1.23.0     | 12.0.0    | ✅   | Dev Env |
+| Windows 10          | 3.11.x         | 1.23.0     | 12.0.0    | ✅   |  |
+| Windows 10          | 3.12.4         | 1.23.0     | 10.4.0    | ✅   |  |
+| Windows 10          | 3.13.7         | 1.23.0     | 11.3.0    | ✅   |  |
+| Windows 10          | 3.12.4         | 1.24.0     | 10.4.0    | ❌   |  |
+| Ubuntu 22.04 (WSL2) | 3.13.10        | 1.23.0     | 12.0.0    | ✅   |  |
+
 ### File Structure
 
 ```
@@ -166,10 +196,13 @@ BA-Modding-Toolkit/
 │ ├── core.py        # Core processing logic
 │ ├── searching.py   # Searching logic
 │ ├── bundle.py      # Bundle class
+│ ├── spine.py       # Spine-related utilities
+│ ├── report.py      # Mod report generator
 │ ├── naming.py      # File naming logic
 │ ├── models.py      # Data models
 │ ├── i18n.py        # Internationalization functionality
 │ ├── utils.py       # Utility classes and helper functions
+│ ├── adb/           # ADB related modules
 │ ├── cli/           # Command Line Interface (CLI) package
 │ │ ├── __main__.py     # CLI Entry Point
 │ │ ├── main.py         # CLI Main Program
@@ -179,23 +212,27 @@ BA-Modding-Toolkit/
 │ │ ├── __init__.py
 │ │ ├── main.py         # GUI program main entry point
 │ │ ├── app.py          # Main application App class
-│ │ ├── base_tab.py     # TabFrame base class
 │ │ ├── components.py   # UI components, themes, logging
 │ │ ├── configs.py      # Configuration definitions
 │ │ ├── utils.py        # UI related utility functions
 │ │ ├── windows/        # Individual windows
 │ │ │ ├── __init__.py
-│ │ │ ├── dialogs.py            # Settings dialogs 
-│ │ │ └── file_list_window.py   # File List window
+│ │ │ ├── adb_browser.py           # ADB Browser window
+│ │ │ ├── settings.py              # Settings window
+│ │ │ ├── abnormal_check_dialog.py # Abnormal Client Check
+│ │ │ ├── report_dialog.py         # Report Dialog
+│ │ │ ├── backup_dialog.py         # Backup Dialog
+│ │ │ └── file_list_window.py      # File List window
 │ │ └── tabs/           # Feature tabs
 │ │   ├── __init__.py
+│ │   ├── base_tab.py              # TabFrame base class
 │ │   ├── mod_update_tab.py        # Mod Update tab
 │ │   ├── batch_update_tab.py      # Batch Update tab
 │ │   ├── crc_tool_tab.py          # CRC Tool tab
 │ │   ├── asset_packer_tab.py      # Asset Packer tab
 │ │   ├── asset_extractor_tab.py   # Asset Extractor tab
-│ │   ├── legacy_conversion_tab.py # Legacy Conversion tab
-│ │   └── batch_legacy_tab.py      # Batch Legacy tab
+│ │   ├── adb_push_tab.py          # ADB Push tab
+│ │   └── tools_tab.py             # Tools tab
 │ ├── assets/         # Project assets
 │ └── locales/        # Language files
 ├── tests/            # Pytest test cases folder
@@ -241,8 +278,8 @@ This project uses the following excellent 3rd-party libraries:
 
 Some useful related repositories:
 
-- [BA-characters-internal-id](https://github.com/Agent-0808/BA-characters-internal-id) ：Search for character names and internal file IDs
 - [BA-AD](https://github.com/Deathemonic/BA-AD)：Download original game resources
+- [AtlasToolkit](https://github.com/com55/AtlasToolkit): Extract, modify, and repack atlas sprites
 
 ### Disclaimer
 

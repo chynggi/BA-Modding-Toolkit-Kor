@@ -14,6 +14,10 @@ LEGACY_FORMAT_DIR = ASSETS_DIR / "legacy_format"
 LEGACY_FORMAT_LEGACY_DIR = LEGACY_FORMAT_DIR / "legacy"
 LEGACY_FORMAT_MODERN_DIR = LEGACY_FORMAT_DIR / "modern"
 
+SPINE_DIR = ASSETS_DIR / "spine"
+SPINE_OLD_ASSETS_DIR = SPINE_DIR / "old_assets"
+SPINE_NEW_BUNDLE_DIR = SPINE_DIR / "new_bundle"
+
 
 def compare_images_mse(img1: Image.Image, img2: Image.Image) -> float:
     if img1.size != img2.size:
@@ -44,6 +48,12 @@ def find_first_file(directory: Path, extension: str) -> Path | None:
         return None
     files = list(directory.glob(f"*{extension}"))
     return files[0] if files else None
+
+
+def find_all_files(directory: Path, extension: str) -> list[Path]:
+    if not directory.exists():
+        return []
+    return list(directory.glob(f"*{extension}"))
 
 
 def has_file(directory: Path, extension: str) -> bool:
@@ -110,9 +120,19 @@ def has_legacy_format_samples() -> bool:
     return has_file(LEGACY_FORMAT_LEGACY_DIR, ".bundle") and has_file(LEGACY_FORMAT_MODERN_DIR, ".bundle")
 
 
+def has_spine_legacy_samples() -> bool:
+    return has_file(SPINE_OLD_ASSETS_DIR, ".atlas") and has_file(SPINE_NEW_BUNDLE_DIR, ".bundle")
+
+
 @pytest.fixture
-def sample_bundle_path() -> Path | None:
-    return find_first_file(PACKER_DIR, ".bundle")
+def sample_bundle_paths() -> list[Path]:
+    return find_all_files(PACKER_DIR, ".bundle")
+
+
+@pytest.fixture
+def sample_bundle_path(sample_bundle_paths: list[Path]) -> Path | None:
+    """单文件 fixture，返回 sample_bundle_paths[0]"""
+    return sample_bundle_paths[0] if sample_bundle_paths else None
 
 
 @pytest.fixture
@@ -131,13 +151,25 @@ def sample_atlas_path() -> Path | None:
 
 
 @pytest.fixture
-def old_mod_bundle_path() -> Path | None:
-    return find_first_file(MOD_UPDATE_OLD_DIR, ".bundle")
+def old_mod_bundle_paths() -> list[Path]:
+    return find_all_files(MOD_UPDATE_OLD_DIR, ".bundle")
 
 
 @pytest.fixture
-def new_original_bundle_path() -> Path | None:
-    return find_first_file(MOD_UPDATE_NEW_DIR, ".bundle")
+def old_mod_bundle_path(old_mod_bundle_paths: list[Path]) -> Path | None:
+    """单文件 fixture，返回 old_mod_bundle_paths[0]"""
+    return old_mod_bundle_paths[0] if old_mod_bundle_paths else None
+
+
+@pytest.fixture
+def new_original_bundle_paths() -> list[Path]:
+    return find_all_files(MOD_UPDATE_NEW_DIR, ".bundle")
+
+
+@pytest.fixture
+def new_original_bundle_path(new_original_bundle_paths: list[Path]) -> Path | None:
+    """单文件 fixture，返回 new_original_bundle_paths[0]"""
+    return new_original_bundle_paths[0] if new_original_bundle_paths else None
 
 
 @pytest.fixture
@@ -155,3 +187,18 @@ def modern_bundles_path() -> list[Path]:
     if not LEGACY_FORMAT_MODERN_DIR.exists():
         return []
     return list(LEGACY_FORMAT_MODERN_DIR.glob("*.bundle"))
+
+
+@pytest.fixture
+def spine_old_assets_dir() -> Path:
+    return SPINE_OLD_ASSETS_DIR
+
+
+@pytest.fixture
+def spine_new_bundle_dir() -> Path:
+    return SPINE_NEW_BUNDLE_DIR
+
+
+@pytest.fixture
+def spine_new_bundle_path() -> list[Path]:
+    return find_all_files(SPINE_NEW_BUNDLE_DIR, ".bundle")

@@ -1,12 +1,17 @@
 # searching.py
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+import os
 
 from .i18n import t
 from .utils import no_log
 from .naming import parse_filename, get_category_prefix
 from .models import LogFunc, AssetKey, AssetType, BundleFileInfo
 from .bundle import Bundle
+
+if TYPE_CHECKING:
+    from .adb.file_source import ADBFileSource
 
 
 def search_prefix(
@@ -16,7 +21,7 @@ def search_prefix(
 ) -> tuple[list[Path], str]:
     """
     通过文件名前缀(prefix)匹配，在搜索目录中收集候选目标文件。
-    使用与源文件相同的后缀名进行匹配。如果源文件后缀为 .backup，则去掉 .backup 后匹配。
+    目标文件后缀固定为 .bundle。
 
     Args:
         source_path: 源文件路径
@@ -29,10 +34,6 @@ def search_prefix(
         - 失败时: ([], 错误消息)
     """
     prefix = parse_filename(str(source_path.name)).prefix
-    # 如果后缀是 .backup，去掉它获取实际后缀（如 .bundle.backup → .bundle）
-    extension = source_path.suffix
-    if extension == '.backup':
-        extension = Path(source_path.stem).suffix
 
     if not prefix:
         msg = t("message.search.filename_parse_failed")
@@ -41,12 +42,19 @@ def search_prefix(
 
     log(f"  > {t('log.search.file_prefix', prefix=prefix)}")
 
-    candidates = [
-        file for dir in search_dirs
-        if dir.exists() and dir.is_dir()
-        for file in dir.iterdir()
-        if file.is_file() and file.name.startswith(prefix) and file.suffix == extension
-    ]
+    # 使用 scandir 代替 iterdir + is_file，避免海量文件时的逐个 stat 系统调用
+    candidates: list[Path] = []
+    for dir in search_dirs:
+        if not dir.is_dir():
+            continue
+        with os.scandir(dir) as it:
+            candidates.extend(
+                Path(entry.path)
+                for entry in it
+                if entry.name.startswith(prefix)
+                and entry.name.endswith('.bundle')
+                and entry.is_file(follow_symlinks=False)
+            )
 
     if not candidates:
         msg = t("message.search.no_matching_files_in_dir")
@@ -65,10 +73,10 @@ def search_core(
     """
     通过文件名核心部分(core)匹配，在搜索目录中收集候选目标文件。
     先通过字符串包含匹配进行初筛，再通过 parse_filename 确认 core 相同。
-    使用与源文件相同的后缀名进行匹配。如果源文件后缀为 .backup，则去掉 .backup 后匹配。
+    目标文件后缀固定为 .bundle。
 
     Args:
-        source_paths: 源文件路径列表
+        source_path: 源文件路径
         search_dirs: 搜索目录列表
         log: 日志记录函数
 
@@ -77,10 +85,6 @@ def search_core(
     """
     parsed = parse_filename(str(source_path.name))
     core = parsed.core
-    # 如果后缀是 .backup，去掉它获取实际后缀（如 .bundle.backup → .bundle）
-    extension = source_path.suffix
-    if extension == '.backup':
-        extension = Path(source_path.stem).suffix
 
     if not core:
         msg = t("message.search.filename_parse_failed")
@@ -89,16 +93,22 @@ def search_core(
 
     log(f"  > {t('log.search.file_core', core=core)}")
 
-    # 字符串包含匹配，粗筛
+    # 字符串包含匹配，粗筛（scandir 避免逐个 stat 系统调用）
     core_lower = core.lower()
     search_prefix = get_category_prefix(core_lower)
-    rough = [
-        file for dir in search_dirs
-        if dir.exists() and dir.is_dir()
-        for file in dir.iterdir()
-        if file.is_file() and file.name.startswith(search_prefix)
-        and core_lower in file.name.lower() and file.suffix == extension
-    ]
+    rough: list[Path] = []
+    for dir in search_dirs:
+        if not dir.is_dir():
+            continue
+        with os.scandir(dir) as it:
+            rough.extend(
+                Path(entry.path)
+                for entry in it
+                if entry.name.startswith(search_prefix)
+                and core_lower in entry.name.lower()
+                and entry.name.endswith('.bundle')
+                and entry.is_file(follow_symlinks=False)
+            )
 
     # 第二轮：parse_filename 确认 core 相同（大小写不敏感）
     candidates = [
@@ -227,26 +237,204 @@ def list_bundle_files(base_dir: Path) -> list[BundleFileInfo]:
     Returns:
         BundleFileInfo 列表（仅基础字段已填充）
     """
-    search_dirs = get_search_dirs(base_dir)
-    if not search_dirs:
-        return []
+    results = []
+    seen = set()
+    for directory in get_search_dirs(base_dir):
+        with os.scandir(directory) as it:
+            for entry in it:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if not entry.name.endswith('.bundle'):
+                    continue
+                
+                # 直接使用 entry.stat() 获取大小和修改时间
+                st = entry.stat(follow_symlinks=False)
 
-    seen: set[Path] = set()
+                bundle_path = Path(entry.path)
+                if bundle_path in seen:
+                    continue
+                seen.add(bundle_path)
+                results.append(BundleFileInfo(
+                    path=bundle_path,
+                    file_size=st.st_size,
+                    modified_time=st.st_mtime,
+                ))
+
+    return results
+
+
+# ========== ADB 远程搜索函数 ==========
+
+def search_prefix_remote(
+    source_path: Path,
+    search_dirs: list[str],
+    file_source: "ADBFileSource",
+    log: LogFunc = no_log,
+) -> tuple[list[str], str]:
+    """在 ADB 远程目录中按前缀搜索文件
+
+    Args:
+        source_path: 源文件路径（本地）
+        search_dirs: 远程搜索目录列表
+        file_source: ADB 文件源适配器
+        log: 日志函数
+
+    Returns:
+        tuple[list[str], str]: (匹配的远程路径列表, 状态消息)
+    """
+    prefix = parse_filename(str(source_path.name)).prefix
+    extension = source_path.suffix
+    if extension == '.backup':
+        extension = Path(source_path.stem).suffix
+
+    if not prefix:
+        msg = t("message.search.filename_parse_failed")
+        log(f'  > {t("common.fail")}: {msg}')
+        return [], msg
+
+    log(f"  > {t('log.search.file_prefix', prefix=prefix)}")
+
+    candidates: list[str] = []
+    for remote_dir in search_dirs:
+        found = file_source.find_files_by_prefix(remote_dir, prefix, extension, log=log)
+        candidates.extend([f.path for f in found])
+
+    if not candidates:
+        msg = t("message.search.no_matching_files_in_dir")
+        log(f'  > {t("common.fail")}: {msg}')
+        return [], msg
+
+    log(f"  > {t('log.search.found_candidates', count=len(candidates))}")
+    return candidates, ""
+
+
+def search_core_remote(
+    source_path: Path,
+    search_dirs: list[str],
+    file_source: "ADBFileSource",
+    log: LogFunc = no_log,
+) -> tuple[list[str], str]:
+    """在 ADB 远程目录中按文件名核心部分(core)匹配搜索 bundle 文件
+
+    Args:
+        source_path: 源文件路径（本地）
+        search_dirs: 远程搜索目录列表
+        file_source: ADB 文件源适配器
+        log: 日志函数
+
+    Returns:
+        tuple[list[str], str]: (匹配的远程路径列表, 状态消息)
+    """
+    parsed = parse_filename(str(source_path.name))
+    core = parsed.core
+
+    if not core:
+        msg = t("message.search.filename_parse_failed")
+        log(f'  > {t("common.fail")}: {msg}')
+        return [], msg
+
+    log(f"  > {t('log.search.file_core', core=core)}")
+
+    core_lower = core.lower()
+    search_prefix_str = get_category_prefix(core_lower)
+
+    # 获取所有以分类前缀开头的 bundle 文件，再按 core 过滤
+    candidates: list[str] = []
+    for remote_dir in search_dirs:
+        # 先按前缀粗筛
+        rough_files = file_source.find_files_by_prefix(
+            remote_dir, search_prefix_str, ".bundle", log=log
+        )
+        # 再按 core 过滤（大小写不敏感）
+        for f in rough_files:
+            if core_lower in f.name.lower():
+                file_core = parse_filename(f.name).core
+                if file_core and file_core.lower() == core_lower:
+                    candidates.append(f.path)
+
+    if not candidates:
+        msg = t("message.search.no_matching_files_in_dir")
+        log(f'  > {t("common.fail")}: {msg}')
+        return [], msg
+
+    log(f"  > {t('log.search.found_candidates', count=len(candidates))}")
+    return candidates, ""
+
+
+def find_target_bundles_remote(
+    source_paths: list[Path],
+    file_source: "ADBFileSource",
+    log: LogFunc = no_log,
+) -> tuple[list[str], str]:
+    """在 ADB 远程设备上查找目标文件
+
+    Args:
+        source_paths: 源文件路径列表（本地）
+        file_source: ADB 文件源适配器
+        log: 日志函数
+
+    Returns:
+        tuple[list[str], str]: (匹配的远程路径列表, 状态消息)
+    """
+    if not source_paths:
+        return [], t("message.search.check_file_exists", path="[]")
+
+    log(t("log.search.searching_for_file_group", count=len(source_paths)))
+
+    search_dirs = file_source.get_search_dirs()
+
+    candidates, err_msg = search_prefix_remote(source_paths[0], search_dirs, file_source, log)
+    if not candidates:
+        return [], err_msg
+
+    # 指纹比对需要将候选文件拉取到本地
+    local_candidates: list[Path] = []
+    for remote_path in candidates:
+        try:
+            local_path = file_source.ensure_local(remote_path)
+            local_candidates.append(local_path)
+        except Exception as e:
+            log(t("log.adb.pull_failed", path=remote_path, error=e))
+            continue
+
+    if not local_candidates:
+        msg = t("message.search.no_matching_asset_found")
+        log(f'  > {t("common.fail")}: {msg}')
+        return [], msg
+
+    matched_local, msg = _asset_match(source_paths, local_candidates, log)
+
+    # 将本地路径映射回远程路径
+    local_to_remote = dict(zip(local_candidates, candidates))
+    matched_remote = [local_to_remote[p] for p in matched_local if p in local_to_remote]
+
+    return matched_remote, msg
+
+
+def list_bundle_files_remote(
+    file_source: "ADBFileSource",
+    log: LogFunc = no_log,
+) -> list[BundleFileInfo]:
+    """扫描 ADB 远程设备上的 bundle 文件
+
+    Args:
+        file_source: ADB 文件源适配器
+        log: 日志函数
+
+    Returns:
+        BundleFileInfo 列表
+    """
+    search_dirs = file_source.get_search_dirs()
     results: list[BundleFileInfo] = []
+    seen: set[str] = set()
 
-    for directory in search_dirs:
-        for bundle_path in sorted(directory.iterdir()):
-            if not bundle_path.is_file() or bundle_path.suffix != '.bundle':
+    for remote_dir in search_dirs:
+        items = file_source.list_files(remote_dir, suffix=".bundle", log=log)
+        for item in items:
+            remote_path_str = str(item.path)
+            if remote_path_str in seen:
                 continue
-            if bundle_path in seen:
-                continue
-            seen.add(bundle_path)
-
-            stat = bundle_path.stat()
-            results.append(BundleFileInfo(
-                path=bundle_path,
-                file_size=stat.st_size,
-                modified_time=stat.st_mtime,
-            ))
+            seen.add(remote_path_str)
+            results.append(item)
 
     return results

@@ -35,7 +35,6 @@
 		"update": "Update",
 		"pack": "Pack",
 		"extract": "Extract",
-		"convert": "Convert",
 		"calculate_crc": "Calculate",
 		"check_crc": "Check CRC",
 		"run_crc_correction": "Correct",
@@ -47,11 +46,22 @@
 		"analyze": "Analyze",
 		"open_in_explorer": "Open in Explorer",
 		"copy_filename": "Copy Filename",
-		"render_preview": "Render Preview"
+		"render_preview": "Render Preview",
+		"send_to_extractor": "Send to Asset Extractor",
+		"cache_to_local": "Cache to Local",
+		"detect": "Detect",
+		"clear_cache": "Clear Cache",
+		"generate": "Generate",
+		"fix_all": "Fix All",
+		"start_backup": "Start Backup"
 	},
 	"option": {
-		"auto_detect_subdirs": "Auto-detect Standard Subdirectories (GameData/Preload)",
-		"auto_detect_subdirs_info": "",
+		"file_source": "File Source",
+		"file_source_info": "Select game resource source platform and server region \n- Windows Global (Local) \n- Windows Japan (Local) \n- Android Global (ADB) \n- Android Japan (ADB)",
+		"file_source_windows_global": "Windows Global (Local)",
+		"file_source_windows_japan": "Windows Japan (Local)",
+		"file_source_adb_global": "Android Global (ADB)",
+		"file_source_adb_japan": "Android Japan (ADB)",
 		"crc_correction": "CRC Correction",
 		"crc_correction_info": "Corrects the CRC checksum of bundle files to prevent the 'Abnormal Client' error after modification.\nThis option must be enabled for the Steam version; it is not required for mobile versions.\nWhen set to 'Auto', the tool will determine if it's needed based on the target bundle's platform info.",
 		"extra_bytes": "Extra Bytes",
@@ -73,17 +83,25 @@
 		"spine_conversion": "Enable Spine Version Conversion",
 		"spine_conversion_info": "(Optional Extension)\nCalls an external program to convert .skel files to a supported version.\nRequires configuring the path to the Skel Converter.",
 		"spine_target_version": "Target Version",
-		"spine_target_version_info": "Format should be \"A.B.C\".",
+		"spine_target_version_info": "Format should be \"A.B.C\".\nskel files whose version does not match the configured version will be rejected.\nWhen the Skel converter is configured and enabled, they are automatically converted to this version.",
+		"preview_thumbnail_size": "Preview Thumbnail Size",
+		"preview_thumbnail_size_info": "Maximum edge length (pixels) of thumbnails in the preview window",
 		"spine_downgrade": "Enable Spine Downgrade",
 		"spine_downgrade_info": "(Optional Extension)\nCalls an external program to export files compatible with older Spine versions (.skel and .atlas).\nRequires configuring the path to the Skel Converter.",
 		"spine_downgrade_target_version": "Target Version",
 		"spine_downgrade_target_version_info": "Format should be \"A.B.C\".",
+		"scale_atlas": "Scale Images",
+		"scale_atlas_info": "Advanced Option\nWhen downgrading Spine, decides whether to scale images according to the scale factor in the Atlas file.\n\nEnable scaling: Automatically resizes images to match dimensions, allowing direct import into Spine, but may cause precision loss and misalignment. In-game rendering will also use the scaled images, resulting in reduced precision.\nDisable scaling (default): Preserves original precision, provides the best in-game rendering, and is recommended for game import. However, when importing into Spine, region attachments will not change size, requiring manual application of the scale factor to the bone's Transform.\n\nThe scaling option affects both in-game rendering and Spine import: when disabled, in-game appears normal and Spine requires manual adjustment; when enabled, images are physically scaled, in-game will also show the scaled effect (with precision loss), and Spine needs no manual adjustment.\nFor importing into Spine, advanced users are recommended to use the no-scaling approach + manually set scale for bones/parts based on the scale factor for the best result.",
 		"unpack_atlas": "Unpack Atlas",
-		"unpack_atlas_info": "Unpacks Atlas into individual PNG frames.\nUnpacked frames are saved in an images/ subdirectory.",
-		"auto_search": "Auto Search for Corresponding Files",
-		"auto_search_info": "",
-		"game_root_dir": "Game Directory",
-		"game_root_dir_info": "Set the game installation directory to automatically locate original bundle files.\nThe program can automatically detect the following subdirectories:\n- BlueArchive_Data/StreamingAssets/PUB/Resource/GameData/Windows\n- BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/Windows\n- GameData/Windows\n- Preload/Windows\n- GameData/Android\n- Preload/Android",
+		"unpack_atlas_info": "Unpacks Atlas into individual PNG frames.\nUnpacked frames will be saved in an images/ subdirectory.",
+		"game_dir_windows_global": "Steam Game Directory (Global)",
+		"game_dir_windows_global_info": "Installation directory for the Steam version (Global server)\nThe program can automatically detect the following subdirectories:\n- BlueArchive_Data/StreamingAssets/PUB/Resource/GameData/Windows\n- BlueArchive_Data/StreamingAssets/PUB/Resource/Preload/Windows\n- GameData/Windows\n- Preload/Windows",
+		"game_dir_windows_japan": "PC Game Directory (Japan)",
+		"game_dir_windows_japan_info": "Installation directory for the PC version (Japan server)",
+		"game_dir_android_global": "Android (Global) Directory",
+		"game_dir_android_global_info": "Game resource directory on Android device (Global server)\ne.g.: /storage/emulated/0/Android/data/com.nexon.bluearchive/files/",
+		"game_dir_android_japan": "Android (Japan) Directory",
+		"game_dir_android_japan_info": "Game resource directory on Android device (Japan server)\ne.g.: /storage/emulated/0/Android/data/com.Yostar JP.BlueArchive/files/",
 		"language": "Language / 语言",
 		"language_info": "Program language.\nRestart the program after changing to take effect.",
 		"output_dir": "Output Directory",
@@ -92,18 +110,46 @@
 		"skel_converter_path_info": "Path to the SpineSkeletonDataConverter.exe file.",
 		"spine_viewer_path": "SpineViewerCLI Path",
 		"spine_viewer_path_info": "Path to the SpineViewerCLI.exe file.",
+		"check_animations": "Detect Animation Differences",
+		"check_animations_info": "When replacing .skel files, detect whether the target contains animations not present in the source\nRequires configuring the SpineViewerCLI path",
 		"match_strategy": "Match Strategy",
 		"match_strategy_info": "Select the strategy for matching resources:\n- path_id: Best for same-version files, exact match\n- cont_name_type: Best for cross-version migration (between Global and Japanese servers) with container+name+type matching\n- name_type: name+type matching",
 		"enable_bleed": "Bleed",
 		"enable_bleed_info": "Applies bleed operations to image files.\nRecommended if packed images show black or jagged edges in-game.",
 		"enable_spine38_name_fix": "Rename Old Spine Filenames",
 		"enable_spine38_name_fix_info": "Rename the filename format exported by older Spine versions to the new format.\nExample: CH0808_home2.png → CH0808_home_2.png",
+		"enable_spine_preview": "Generate Spine Preview",
+		"enable_spine_preview_info": "Generate preview images for Spine assets (requires SpineViewerCLI path to be configured)\n\nNote: this feature can take a long time.",
+		"extractor_render_preview": "Render Preview",
+		"extractor_render_preview_info": "Render preview images for the extracted Spine assets after extraction (requires SpineViewerCLI path to be configured).\nPreviews directly reuse the extracted files without re-extracting.\n\nNote: if Atlas unpacking is also enabled, previews for some assets may fail to generate.",
+		"report_format": "Report Format",
+		"report_format_info": "Choose the report output format:\n- List: one item per line, good for quick browsing\n- Table: Markdown table, recommended when rendering preview images",
+		"report_format_list": "List",
+		"report_format_table": "Table",
+		"report_render_preset": "Preview Quality",
+		"report_render_preset_info": "Select the rendering quality of preview images.\nHigher quality may take longer to render.",
+		"report_render_preset_low": "Low Quality",
+		"report_render_preset_high": "High Quality",
+		"render_characters": "Render Character Art",
+		"render_characters_info": "Render preview images for Spine assets in the spinecharacters category",
+		"render_lobbies": "Render Memory Lobby",
+		"render_lobbies_info": "Render preview images for Spine assets in the spinelobbies category",
+		"render_background": "Render Other Spine Assets",
+		"render_background_info": "Render preview images for Spine assets in the spinebackground category",
 		"max_workers": "Max Workers",
-		"max_workers_info": "Number of mod files processed simultaneously.\n\nIncreasing the number increases processing speed but increases memory usage.",
+		"max_workers_info": "Number of parallel threads for batch tasks (batch update / batch preview rendering, etc.).\nIncreasing the number improves processing speed but increases memory and CPU usage.",
 		"character_id_map": "Character ID Map",
-		"character_id_map_info": "Character ID to name mapping table, used to display character names in the file list.",
+		"character_id_map_info": "Character ID to name mapping table, used to display actual character names for files.",
+		"character_index_column": "Index Column",
+		"character_index_column_info": "The column in the mapping CSV used as the lookup key (character internal ID).\nKey values should look like CH0808.",
 		"character_name_field": "Character Name",
-		"character_name_field_info": "Select the display field for character names:\nfull_name: KivoWiki (Chinese, Most Complete)\nname_cn: Chinese Mainland Server\nname_jp: Japanese\nname_tw: Traditional Chinese\nname_en: English\nname_kr: Korean"
+		"character_name_field_info": "Select the display field for character names:\nfull_name: kivo.wiki (Chinese, Most Complete)\nname_cn: Chinese Mainland Server\nname_jp: Japanese\nname_tw: Traditional Chinese\nname_en: English\nname_kr: Korean\n\nThe English and Korean versions contain only the character names, while the JP, CN, TW versions also include the names of the characters' costume variants (e.g., Swimsuit, Maid, etc.). The kivo.wiki version additionally includes names for more NPC variants (e.g., Sportswear, Unarmed, etc.).",
+		"adb_path": "ADB Path",
+		"adb_path_info": "Full path to adb.exe, or \"adb\" to use system PATH",
+		"adb_cache_dir": "Cache Directory",
+		"adb_cache_dir_info": "Local cache directory for ADB files",
+		"backup_path": "Backup Path",
+		"backup_path_info": "Choose the directory where backup files will be saved"
 	},
 	"file_type": {
 		"executable": "Executable File",
@@ -126,6 +172,7 @@
 		"dir_not_found_create": "Directory does not exist:\n{path}\n\nDo you want to create it?",
 		"path_invalid": "Invalid path: {path}",
 		"no_file_selected": "No file selected.",
+		"no_bundle_found": "No bundle files found",
 		"list_empty": "List is empty, please add items first.",
 		"drop_single_file": "Please drop only one file at a time.",
 		"missing_paths": "Please ensure all necessary paths are set.",
@@ -137,7 +184,6 @@
 		"open_manually": "Please open the directory manually: {path}",
 		"invalid_operation": "Invalid operation",
 		"execution_error": "An error occurred during execution:\n{error}",
-		"create_dir_failed_detail": "Failed to create directory:\n{path}\n\nError details: {error}",
 		"output_dir_not_set": "Output directory not set. Please configure it in settings first.",
 		"save_success": "File saved successfully.",
 		"same_file": "Both paths are identical!",
@@ -168,7 +214,16 @@
 			"match_no": "CRC Match: ❌ No",
 			"correction_failed_file_not_generated": "CRC Correction failed. The final file \"{name}\" could not be generated."
 		},
-		"spine": {},
+		"spine": {
+			"version_conflict_header": "The following .skel files have a Spine version inconsistent with the target version ({major_minor}.x) and have been rejected:",
+			"version_conflict_item": "  - {name} (source version {source})",
+			"version_conflict_hint": "Please check the Spine converter settings."
+		},
+		"report_open_prompt": "Report generated!\nOpen the report file?",
+		"batch_preview_open_prompt": "Batch rendering complete!\nSucceeded {rendered} / {total} groups. Open the output directory?",
+		"batch_preview": {
+			"no_category": "Please select at least one category to render."
+		},
 		"search": {
 			"check_file_exists": "Please check if \"{path}\" exists.",
 			"no_matching_files_in_dir": "No matching files found in the specified directory.",
@@ -183,30 +238,49 @@
 			"extraction_complete": "Extraction complete. Output {count} files."
 		},
 		"mod_update": {
-			"success": "One-click update successful!",
+			"success": "Update successful!",
 			"no_assets_extracted": "No assets were extracted from source files",
 			"no_targets_processed": "No target files were successfully processed",
 			"all_targets_unchanged": "All target files are unchanged, no update needed"
-		},
-		"legacy_convert": {
-			"modern_to_legacy_success": "Modern -> Legacy Conversion Successful!\nReplaced {asset_count} assets",
-			"legacy_to_modern_success": "Legacy -> Modern Conversion Successful!\nReplaced {bundle_count} bundles, {asset_count} assets",
-			"conversion_error": "Conversion error:\n{error}",
-			"no_assets_in_source": "No assets found in source file, cannot convert.",
-			"no_assets_matched": "No matching assets found, cannot convert.",
-			"load_legacy_failed": "Failed to load legacy file."
 		},
 		"save_error": "Error saving file: {error}",
 		"replace_result": "Replacement completed!\nSuccess: {success} files, Failure: {fail} files",
 		"batch": {
 			"success": "Batch processing completed!\nSuccess: {success}, Failure: {fail}"
 		},
+		"anim_diff": {
+			"header": "Some new animations required by the game are missing in this Mod.\nWhen these animations are played in-game (e.g., during story events),\nthe game may freeze.\n\nTo avoid this issue, check the detailed missing list in the log above,\nand confirm the correct update with the Mod author."
+		},
 		"3rd_party": {
 			"download_guide": "Download {program}?\n{url}",
 			"skel_converter_not_configured": "SpineSkeletonDataConverter not configured.\nPlease configure the path in the settings page for SpineSkeletonDataConverter.",
 			"spine_viewer_required": "SpineViewerCLI program not set or path is invalid.\n\nPlease configure the path in the settings page for SpineViewerCLI."
 		},
-		"download_confirm": "Download file from:\n{url}\n\nAnd save to: {path}"
+		"download_confirm": "Download file from:\n{url}\n\nAnd save to: {path}",
+		"adb": {
+			"detect_success": "ADB detected successfully: {version}",
+			"detect_failed": "ADB detection failed. Please check the path.",
+			"not_connected": "ADB device not connected",
+			"clear_cache_confirm": "Are you sure you want to clear all ADB cache files?",
+			"clear_cache_done": "Cache cleared, freed {size}",
+			"push_confirm": "The following files will be pushed to the Android device. Continue?\n{files}",
+			"cache_complete": "Cache complete, {success} succeeded, {fail} failed",
+			"no_local_files": "Please select local files to push first",
+			"no_target_dir": "Please specify a target directory",
+			"push_summary": "Push complete: {success} succeeded, {fail} failed"
+		},
+		"abnormal_check": {
+			"no_mismatch": "No CRC mismatches found",
+			"confirm_fix": "Fix CRC values of {count} files?",
+			"fix_complete": "Fix complete"
+		},
+		"backup": {
+			"path_required": "Please select a backup path first",
+			"clear_confirm": "Backup directory already exists. Clear it and back up again?",
+			"open_prompt": "Backup complete, {count} mod files backed up.\nOpen the backup directory?",
+			"no_mod_found": "No mod files found"
+		},
+		"task_running_close_confirm": "A task is running; closing the window will stop it.\n\nAre you sure you want to close the window?"
 	},
 	"status": {
 		"ready": "Ready",
@@ -268,9 +342,12 @@
 			"skel_conversion_failed": "Skel conversion failed",
 			"skel_detected": "Detected .skel file: {name}",
 			"version_mismatch_converting": "Spine version mismatch detected (Current {current}, Target {target}). Converting.",
+			"version_mismatch_no_convert": "Spine version mismatch detected (current {current}, target {target}) and the Spine converter is not enabled.",
+			"version_conflict_rejected": "Detected {count} .skel version conflicts, replacement rejected",
 			"converting_atlas": "Converting Atlas: {name}",
 			"version_detected_downgrading": "Detected Spine version: {version}. Attempting downgrade...",
 			"atlas_downgrade_success": "Atlas downgrade successful",
+			"legacy_rename_detected": "Detected legacy filename that requires renaming",
 			"edit_atlas": "Edited Atlas file: {filename}",
 			"unpacking_atlas": "Unpacking Atlas: {name}",
 			"atlas_unpack_success": "Atlas unpack successful, frames saved to: {path}",
@@ -286,18 +363,27 @@
 			"no_animation_found": "No available animations found: {name}",
 			"using_first_animation": "No Idle_01 or Dummy found, using first animation found: {anim}",
 			"preview_complete": "Preview render completed, generated {count} files.",
-			"preview_failed": "Preview render failed."
+			"preview_failed": "Preview render failed.",
+			"anim_check_comparing": "Checking animation differences: {name}",
+			"anim_check_new_animations": "Target {name} contains animations not present in the source: {animations}",
+			"anim_check_no_diff": "{name} animations match",
+			"anim_check_failed": "Animation difference check failed: {error}",
+			"anim_diff_title": "The following files contain new animations missing from the original Mod:",
+			"anim_diff_item_count": "{count} animations missing",
+			"anim_diff_missing_list": "Missing list: {animations}",
+			"anim_diff_hint": "Hint: The original game may have updated animations. Using an old Mod directly may cause the game to freeze when these animations are triggered."
 		},
 		"packer": {
 			"start_packing": "Starting packing resources...",
 			"pack_success_path": "Packing successful. File output to: {path}",
 			"found_files_to_process": "Found {count} files to process. Scanning bundle and replacing...",
 			"no_assets_packed": "No successful asset packing performed.",
-			"check_files_and_bundle": "Please check:\n1. Whether filenames match the asset names in the bundle exactly.\n2. Whether the bundle file is correct.",
+			"no_changes_saved": "No changes made, saved original bundle: {name}",
 			"packing_complete": "Packing complete: Successfully packed {success} / {total} assets.",
 			"unmatched_files_warning": "The following files did not match any assets in the bundle",
 			"attempted_match": "Attempted match: \"{key}\"",
-			"bleed_processed": "Processed Bleed for image {name}"
+			"bleed_processed": "Processed Bleed for image {name}",
+			"strategy_success": "Applied {count} assets with strategy {strategy}"
 		},
 		"crc": {
 			"loaded_original": "Loaded original file: {file}",
@@ -313,13 +399,30 @@
 			"modified_file_crc32": "Modified File CRC32: {crc}",
 			"original_file_crc32": "Original File CRC32: {crc}"
 		},
+		"report": {
+			"scan_start": "Start scanning",
+			"analyze_trailing": "Analyzing trailing bytes",
+			"bundle_count": "Found {count} bundle files",
+			"mod_count": "Found {count} mod files",
+			"render_preview": "Rendering preview image",
+			"render_retry": "Mod does not contain full assets, retrying with original files: {prefix}",
+			"render_count": "Rendered {count} previews",
+			"no_mod_found": "No mod files found",
+			"saved": "Report saved to: {path}",
+			"success": "Report generated successfully, {count} mods"
+		},
+		"batch_preview": {
+			"scan_start": "Starting batch render scan",
+			"no_spine_found": "No Spine assets found",
+			"group_count": "Found {count} Spine asset groups to render",
+			"render_count": "Batch rendering complete: {count} / {total} groups succeeded"
+		},
 		"section": {
 			"extract_to_temp": "Extract resources to temp directory",
 			"move_to_output": "Move extracted files to output directory",
 			"process_spine_downgrade": "Process Spine assets and downgrade",
 			"process_atlas_unpack": "Unpack Atlas frame images",
 			"render_preview": "Render preview images",
-			"applying_to_global": "Applying to Global file",
 			"applying_to_targets": "Applying to target group",
 			"extracting_patches": "Extracting Patches"
 		},
@@ -336,9 +439,7 @@
 			"found_candidates": "Found {count} candidate files. Verifying content...",
 			"source_mod_asset_count": "Source group contains {count} assets.",
 			"checking_candidate": "Checking: {name}",
-			"find_failed": "Search failed: {message}",
-			"found_count": "Successfully found {count} matching files.",
-			"no_found": "No files found"
+			"find_failed": "Search failed: {message}"
 		},
 		"extractor": {
 			"starting_extraction": "Starting extraction from \"{filename}\"...",
@@ -348,19 +449,6 @@
 			"skipping_unnamed": "Skipping an unnamed {type} asset",
 			"extraction_failed": "Error extracting asset {name}: {error}",
 			"processing_file": "Processing: {name}"
-		},
-		"migration": {
-			"extracting_from_old_bundle": "Extracting specified asset types from old bundle: {types}",
-			"loading_new_bundle": "Loading new bundle...",
-			"trying_strategy": "Attempting match using strategy \"{name}\"",
-			"extracting_from_old_bundle_simple": "Extracting assets from old bundle...",
-			"strategy_no_assets_found": "Strategy \"{name}\" found no specified asset types in old bundle.",
-			"extraction_complete": "Extraction complete: Extracted {count} assets using strategy \"{name}\".",
-			"writing_to_new_bundle": "Writing assets to new bundle...",
-			"strategy_success": "Strategy \"{name}\" successfully replaced {count} assets",
-			"strategy_no_match": "Strategy \"{name}\" failed to match any assets.",
-			"all_strategies_failed": "All matching strategies failed to find replaceable assets ({types}) in the new bundle.",
-			"strategy_skipped_unchanged": "Strategy \"{name}\": All files unchanged, skipping generation"
 		},
 		"mod_update": {
 			"all_processes_complete": "All processes completed!",
@@ -382,29 +470,12 @@
 			"process_unchanged": "Content unchanged, skipping: {filename}",
 			"output_files_list": "Output files list ({count} total):"
 		},
-		"legacy_convert": {
-			"found_match": "Found: {path}",
-			"searching_jp_counterparts": "Searching for corresponding JP file for \"{name}\"...",
-			"extracted_count_from_jp": "Extracted {count} assets from JP file",
-			"no_assets_replaced": "No assets replaced",
-			"starting_conversion": "Starting conversion...",
-			"extracted_count": "Extracted {count} assets.",
-			"conversion_complete": "Conversion complete!",
-			"file_unchanged": "File content unchanged: {name} ({count} assets)",
-			"legacy_source_file": "Legacy Source File: {name}",
-			"modern_files_count": "Selected Modern files: {count}"
-		},
 		"summary": {
 			"title": "Processing Summary",
 			"total_files": "Total: {count} files",
 			"output_files": "Output: {count} files",
 			"skipped_files": "Skipped: {count} files",
-			"failed_files": "Failed: {count} files",
-			"replaced_assets": "Replaced {count} assets",
-			"no_changes": "No changes",
-			"output_item": "  - {name} ({detail})",
-			"skipped_item": "  - {name}",
-			"failed_item": "  - {name}: {reason}"
+			"no_changes": "No changes"
 		},
 		"game_dir_not_set": "Game resource directory not set. Cannot automatically locate original files.",
 		"file_not_found_in_dirs": "Could not find corresponding original file \"{filename}\" in specified resource directories.",
@@ -413,14 +484,40 @@
 		"success_fail": "Success: {success}, Fail: {fail}",
 		"error_detail": "Error occurred: {error}",
 		"error_processing": "Error occurred during processing: {error}",
-		"processing_filename_with_progress": "({current}/{total}) Processing file: {name}",
 		"process_failed": "Process failed: {error}",
 		"replace_original": "You can now press the \"{button}\" button to overwrite the original file",
 		"generated_file_not_found": "Operation reported success, but the generated file was not found in the output directory.",
 		"replace_resource_failed": "Error replacing resource [{type}] {name}: {error}",
+		"replace_applied": "Replaced [{type}] {name}",
 		"replace_skipped_same_content": "Skipped replacement for [{type}] {name}: content identical to original",
 		"platform_info": "Target Platform: {platform} (Unity {version})",
-		"unnamed_resource": "Unnamed {type} asset"
+		"unnamed_resource": "Unnamed {type} asset",
+		"adb": {
+			"cache_hit": "Cache hit: {name}",
+			"cache_miss": "Cache miss, pulling from device: {name}",
+			"pull_failed": "Pull failed: {path} - {error}",
+			"push_failed": "Push failed: {path} - {error}",
+			"list_dir_failed": "List directory failed: {path} - {error}",
+			"push_start": "Pushing to device: {name}",
+			"push_success": "Push successful: {name}",
+			"cache_caching": "Caching {count} files to local...",
+			"cache_delete_failed": "Failed to delete cache file {name}: {error}",
+			"push_start_batch": "Pushing {count} file(s) to {dir}"
+		},
+		"abnormal_check": {
+			"found_count": "Found {count} files with CRC mismatch",
+			"fixing": "Fixing: {filename}",
+			"fix_success": "Fix succeeded: {filename}",
+			"fix_failed": "Fix failed: {filename}",
+			"fix_verify_failed": "Fix verification failed: {filename}",
+			"fix_error": "Error fixing {filename}: {error}"
+		},
+		"backup": {
+			"start": "Starting mod backup",
+			"found_mods": "Found {count} mod files",
+			"copying": "Backing up ({current}/{total}): {filename}",
+			"done": "Backup complete, {count} files"
+		}
 	},
 	"ui": {
 		"app_title": "BA Modding Toolkit",
@@ -430,18 +527,67 @@
 			"crc_tool": "CRC Tool",
 			"asset_packer": "Asset Packer",
 			"asset_extractor": "Asset Extractor",
-			"legacy_conversion": "Legacy Conversion",
-			"batch_legacy": "Batch Legacy",
-			"file_list": "File List"
+			"file_list": "File List",
+			"adb_push": "ADB File Push",
+			"tools": "Tools"
+		},
+		"tools": {
+			"batch_tools": "Batch Tools",
+			"batch_tools_info": "Mod detection method: compares the size recorded in the bundle file header with the actual file size. If extra trailing bytes are appended to the file, it is identified as a mod. The batch tools below all rely on this detection.\n\nNote: this detection method is only guaranteed to work on the Steam version. Mods for other versions can enter the game without CRC correction, so detection is not guaranteed for them.",
+			"report": {
+				"title": "Generate Mod Report",
+				"info": "Scan all detected mod files in the game directory and generate a Markdown report grouped by category. Optionally render Spine preview images."
+			},
+			"abnormal_check": {
+				"title": "Fix \"Abnormal Client\"",
+				"info": "Detect mod files whose filename CRC does not match the actual file CRC (such files are flagged as abnormal by the game client), and fix them with one click.",
+				"result_list": "Detection Results",
+				"column_filename": "Filename",
+				"column_char_name": "Character",
+				"column_target_crc": "Target CRC",
+				"column_actual_crc": "Actual CRC"
+			},
+			"backup": {
+				"title": "Backup Mods",
+				"info": "Copy all detected mod files in the game directory to the specified backup directory, preserving the original directory structure."
+			},
+			"batch_preview": {
+				"title": "Batch Render Previews",
+				"info": "Render preview images for all Spine assets (character art, memory lobby, Spine backgrounds) in the specified game resource directory, not limited to mod files. Output to the batch_preview subdirectory of the output directory.",
+				"game_dir": "Game Resource Directory"
+			}
 		},
 		"settings": {
 			"title": "Settings",
 			"button_text": "Settings",
 			"group_save": "Save Settings",
 			"group_assets": "Asset Options",
-			"group_spine": "Spine Tool Settings",
+			"group_skel_converter": "Skel Converter",
+			"group_spine_viewer": "SpineViewer",
+			"group_bacii": "Character Names",
+			"group_performance": "Performance",
 			"group_app": "App Settings",
-			"group_paths": "Path Settings"
+			"group_paths": "Path Settings",
+			"group_adb": "ADB Settings",
+			"adb": {
+				"device": "Device Selection",
+				"detecting": "Detecting...",
+				"device_connected": "Device ready",
+				"device_unauthorized": "Device unauthorized. Please allow USB debugging on your phone.",
+				"device_offline": "Device offline",
+				"cache_size": "Cache size: {size}"
+			}
+		},
+		"column": {
+			"filename": "Filename",
+			"file_size": "Size",
+			"modified_time": "Modified"
+		},
+		"adb_push": {
+			"local_files": "Local Files",
+			"placeholder_local": "Drag and drop files or folders here...",
+			"target_dir": "Target Directory (device path)",
+			"push": "Push to Device"
 		},
 		"mod_update": {
 			"placeholder_old": "Drag and drop the old Mod file to update or port here\nOr click the button below to select",
@@ -460,22 +606,11 @@
 		"extractor": {
 			"placeholder_bundle": "Drag and drop all Bundles to extract from here"
 		},
-		"legacy_conversion": {
-			"mode_modern_to_legacy": "Modern → Legacy (Merge)",
-			"mode_legacy_to_modern": "Legacy → Modern (Split)",
-			"placeholder_modern_bundles": "Drag and drop all related modern Bundles here\ntextures, textassets etc.",
-			"role_legacy_target": "Legacy Bundle (Target)",
-			"role_modern_source": "Modern Bundle (Source)",
-			"role_legacy_source": "Legacy Bundle (Source)",
-			"role_modern_target": "Modern Bundle (Target)",
-			"placeholder_legacy_bundle": "Drag and drop legacy Bundle here\nOr click the button below to select"
-		},
 		"dialog": {
 			"select": "Select {type}",
-			"add": "Add {type}",
 			"select_file": "Select File",
-			"multiple_matches_found": "Found {count} matching files:",
-			"selection_cancelled": "Selection cancelled"
+			"adb_browser": "ADB File Selector",
+			"adb_browser_dir": "ADB Directory Selector"
 		},
 		"drop_zone": {
 			"file_hint": "Drag and drop files here\nOr click the button below to select",
@@ -484,9 +619,11 @@
 			"multiple_files_rejected": "Only single file supported per drop",
 			"contains": "Contains {count} files: {types}"
 		},
+		"preview": {
+			"double_click_hint": "Double-click the image to view the full-size version"
+		},
 		"label": {
 			"mod_file": "Mod File to Process",
-			"target_resource_bundle": "Target Resource Bundle",
 			"search_path": "Search Path:",
 			"assets_to_pack": "Assets to Pack",
 			"target_bundle_file": "Target Bundle File",
@@ -496,9 +633,11 @@
 			"environment": "Environment",
 			"github": "GitHub",
 			"options": "Options",
-			"target_crc": "Target CRC Value"
+			"adb_cache": "ADB Cache",
+			"target_crc": "Target CRC Value",
+			"mod_info": "About Mod Detection"
 		},
-		"log_area": "Log Area",
+		"log_area": "Log",
 		"status_label": "Status: ",
 		"file_list": {
 			"window_title": "Bundle File List",
@@ -509,6 +648,7 @@
 				"modified_time": "Modified Time",
 				"trailing_bytes": "Trailing Bytes",
 				"trailing_content": "Trailing Content",
+				"category": "Category",
 				"core": "Core",
 				"character": "Character Name",
 				"res_type": "Resource Type",
@@ -544,7 +684,7 @@
 			},
 			"filter": {
 				"has_trailing": "Has Trailing Bytes",
-				"crc_mismatch": "Exclude CRC Mismatch",
+				"crc_mismatch": "CRC Mismatch",
 				"has_character": "Has Character Name",
 				"common_mod": "Common Mod Prefix"
 			},
@@ -555,6 +695,14 @@
 				"ends_with": "ends with",
 				"regex": "regex"
 			}
+		},
+		"adb_browser": {
+			"loading": "Loading file list...",
+			"error": "Loading failed: {error}",
+			"found": "Scan complete, {count} files found"
+		},
+		"anim_diff": {
+			"title": "Missing Animations Warning"
 		}
 	}
 }

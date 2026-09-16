@@ -9,9 +9,11 @@ from ...i18n import t
 from ... import core
 from ...models import FileType
 from ...naming import parse_filename
-from ..base_tab import TabFrame
+from ...spine import SpineViewer
 from ..components import UIComponents, SettingRow, DropZone
 from ..utils import select_directory, open_directory
+from ..windows.preview_window import PreviewWindow
+from .base_tab import TabFrame
 
 class AssetExtractorTab(TabFrame):
     def create_widgets(self):
@@ -29,6 +31,7 @@ class AssetExtractorTab(TabFrame):
             self,
             title=t("ui.label.bundles_to_extract"),
             placeholder_text=t("ui.extractor.placeholder_bundle"),
+            app=self.app,
             file_types=[FileType.BUNDLE, FileType.BUNDLE_BACKUP, FileType.ALL],
             on_files_selected=on_files_selected,
             logger=self.logger,
@@ -50,7 +53,7 @@ class AssetExtractorTab(TabFrame):
         SettingRow.create_switch(
             options_frame,
             label=t("option.spine_downgrade"),
-            variable=self.app.enable_atlas_downgrade_var,
+            variable=self.app.enable_spine_downgrade_var,
             tooltip=t("option.spine_downgrade_info"),
             app=self.app,
             on_click_disabled=self.app.show_spine_converter_not_configured
@@ -62,16 +65,34 @@ class AssetExtractorTab(TabFrame):
             label=t("option.spine_downgrade_target_version"),
             text_var=self.app.spine_downgrade_version_var,
             tooltip=t("option.spine_downgrade_target_version_info"),
-            app=self.app,
-            on_click_disabled=self.app.show_spine_converter_not_configured
+            app=self.app
         )
-        
+
+        # Atlas 缩放选项
+        SettingRow.create_switch(
+            options_frame,
+            label=t("option.scale_atlas"),
+            variable=self.app.scale_atlas_var,
+            tooltip=t("option.scale_atlas_info"),
+            app=self.app
+        )
+
         # Atlas 解包帧选项
         SettingRow.create_switch(
             options_frame,
             label=t("option.unpack_atlas"),
             variable=self.app.unpack_atlas_var,
             tooltip=t("option.unpack_atlas_info")
+        )
+
+        # 渲染预览图选项
+        SettingRow.create_switch(
+            options_frame,
+            label=t("option.extractor_render_preview"),
+            variable=self.app.render_preview_var,
+            tooltip=t("option.extractor_render_preview_info"),
+            app=self.app,
+            on_click_disabled=self._show_spine_viewer_not_configured
         )
 
         # 操作按钮
@@ -83,11 +104,19 @@ class AssetExtractorTab(TabFrame):
                                                  bootstyle="success", style="large")
         run_button.grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=10)
 
+    def _show_spine_viewer_not_configured(self, parent: tk.Widget | None = None):
+        """显示 SpineViewer 未配置的提示"""
+        messagebox.showwarning(
+            t("common.warning"),
+            t("message.3rd_party.spine_viewer_required")
+        )
+
     def select_output_dir(self):
         """选择输出子目录"""
         selected_dir = select_directory(
             var=None,
             title=t("ui.dialog.select", type=t("option.output_dir")),
+            parent=self,
             log=self.logger.log
         )
         
@@ -138,32 +167,80 @@ class AssetExtractorTab(TabFrame):
             final_output_path = output_path
             
         asset_types = self.app.get_asset_types()
+        # 提取链路不支持 "ALL" 占位符，需展开为具体类型
+        if 'ALL' in asset_types:
+            asset_types = {'Texture2D', 'TextAsset', 'Mesh'}
         
         if not asset_types:
             messagebox.showwarning(t("common.tip"), t("message.missing_asset_type"))
             return
             
         unpack_atlas = self.app.unpack_atlas_var.get()
-            
+
+        # 校验 SpineViewer 路径（启用预览渲染时）
+        if self.app.render_preview_var.get():
+            viewer_path_str = self.app.spine_viewer_path_var.get().strip()
+            if not viewer_path_str:
+                messagebox.showerror(t("common.error"), t("message.3rd_party.spine_viewer_required"))
+                return
+            viewer_path = Path(viewer_path_str)
+            if not viewer_path.exists():
+                messagebox.showerror(t("common.error"), t("message.file_not_found", path=viewer_path_str))
+                return
+
         self.run_in_thread(self.run_extraction, bundle_paths, final_output_path, asset_types, unpack_atlas)
 
     def run_extraction(self, bundle_paths: list[Path], output_dir: Path, asset_types: set[str], unpack_atlas=False):
         self.logger.status(t("status.extracting"))
-        
+
         spine_options = self.app.build_spine_options(upgrade_mode=False)
-        
+        scale_atlas = self.app.scale_atlas_var.get()
+
         success, message = core.process_asset_extraction(
             bundle_path=bundle_paths,
             output_dir=output_dir,
             asset_types_to_extract=asset_types,
             spine_options=spine_options,
-            unpack_atlas=unpack_atlas,
+            enable_unpack_atlas=unpack_atlas,
+            scale_atlas=scale_atlas,
             log=self.logger.log
         )
         
         if success:
+            # 渲染预览图（复用已解包的文件，避免重复解包）
+            if self.app.render_preview_var.get():
+                self._render_previews(output_dir)
             messagebox.showinfo(t("common.success"), message)
         else:
             messagebox.showerror(t("common.fail"), message)
             
         self.logger.status(t("status.done"))
+
+    def _render_previews(self, output_dir: Path) -> None:
+        """从已解包的 skel 文件渲染预览图（复用解包结果，不重复解包）"""
+        skel_files = list(output_dir.glob("*.skel"))
+        if not skel_files:
+            self.logger.log(t("log.spine.no_skel_found"))
+            return
+
+        viewer_path = Path(self.app.spine_viewer_path_var.get().strip())
+
+        self.logger.log(f'\n--- {t("log.section.render_preview")} ---')
+        success_count = 0
+        rendered_paths: list[Path] = []
+        for skel_path in skel_files:
+            output_path = output_dir / f"{skel_path.stem}_preview.png"
+            success, _ = SpineViewer.render_preview(
+                skel_path=skel_path,
+                output_path=output_path,
+                viewer_path=viewer_path,
+                log=self.logger.log,
+            )
+            if success:
+                success_count += 1
+                rendered_paths.append(output_path)
+
+        if success_count:
+            self.logger.log(f'\n✓ {t("log.spine.preview_complete", count=success_count)}')
+            # 后台线程不能直接创建组件，调度到主线程弹出预览窗口
+            self.after(0, lambda: PreviewWindow(self, self.app, rendered_paths))

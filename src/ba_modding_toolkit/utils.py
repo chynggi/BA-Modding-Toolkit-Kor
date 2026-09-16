@@ -1,16 +1,19 @@
 # utils.py
 
 import binascii
-import re
-import shutil
-from PIL import Image
 import subprocess
-import tempfile
+import sys
+import time
+from functools import wraps
+from PIL import Image
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal, ParamSpec, TypeVar
 
 from .i18n import i18n_manager, t
+
+# Windows 下隐藏子进程的控制台窗口（避免Nuitka打包后弹出terminal）
+CREATE_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 def _get_path_from_registry(key_path: str) -> str | None:
     """从 Windows 注册表获取 Steam 游戏的安装路径。"""
@@ -25,34 +28,71 @@ def _get_path_from_registry(key_path: str) -> str | None:
             return install_path
             
     except Exception as e:
-        print(f"读取注册表出错: {e}")
+        print(f"读取注册表 {key_path} 时出错: {e}")
 
     return None
 
-def get_BA_path() -> str | None:
-    BA_STEAM_APPID = 3557620
-    GL_path = _get_path_from_registry(fr"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App {BA_STEAM_APPID}")
+_ba_path_cache: dict[str, str | None] = {}
 
-    # TODO: JP_path
-    # JP_path = get_path_from_registry(fr"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\e02a2fab-b426-5ce2-b9de-b9e7506c327e")
+# 游戏区服，用于定位安装路径；auto = global 优先，japan 兜底
+BARegion = Literal["auto", "global", "japan"]
 
-    return GL_path
+def get_BA_path(region: BARegion = "auto") -> str | None:
+    """获取游戏安装路径，带缓存机制
 
-def get_version() -> str:
-    """从 pyproject.toml 读取版本号"""
+    Args:
+        region: 区服，"auto"（默认）时优先返回 global 的结果，找不到则回退 japan
+
+    Returns:
+        游戏安装路径，如果未找到则返回 None
+    """
+    if region in _ba_path_cache:
+        return _ba_path_cache[region]
+
+    if region == "global":
+        BA_STEAM_APPID = 3557620
+        result = _get_path_from_registry(fr"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App {BA_STEAM_APPID}")
+    elif region == "japan":
+        result = _get_path_from_registry(r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\e02a2fab-b426-5ce2-b9de-b9e7506c327e")
+    else:  # auto
+        result = get_BA_path("global") or get_BA_path("japan")
+        return result  # auto 不缓存，保持对注册表变化的响应
+
+    _ba_path_cache[region] = result
+    return result
+
+def get_version_info() -> dict[str, str]:
+    """获取版本信息（包含 commit、branch、build time 等元数据）"""
+    info = {
+        "version": "",
+        "commit_hash": "",
+        "commit_hash_short": "",
+        "branch": "",
+        "tag": "",
+        "build_time": ""
+    }
     try:
-        from ba_modding_toolkit._version import __version__
-        print(__version__)
+        from ba_modding_toolkit._version import (
+            __version__, __commit_hash__, __commit_hash_short__,
+            __branch__, __tag__, __build_time__
+        )
+        info["version"] = __version__
+        info["commit_hash"] = __commit_hash__
+        info["commit_hash_short"] = __commit_hash_short__
+        info["branch"] = __branch__
+        info["tag"] = __tag__
+        info["build_time"] = __build_time__
     except ImportError:
         # 如果在本地开发环境没有这个文件，回退到读取 pyproject.toml
         try:
             import toml
             with open("pyproject.toml", 'r', encoding='utf-8') as f:
                 data = toml.load(f)
-                __version__ = data["project"]["version"] + "-dev"
+                info["version"] = data["project"]["version"] + "-dev"
         except:
-            __version__ = "0.0.0-dev"
-    return __version__
+            pass
+
+    return info
 
 def no_log(message):
     """A dummy logger that does nothing."""
@@ -197,6 +237,13 @@ class CRCUtils:
                 a ^= CRCUtils.POLY_NORMAL
         return result
 
+# 程序所在目录（打包后为 exe 目录，开发环境为项目根目录）
+EXE_DIR: Path = (
+    Path(__compiled__.containing_dir).resolve()
+    if "__compiled__" in globals() and hasattr(__compiled__, "containing_dir")
+    else Path(__file__).resolve().parents[2]
+)
+
 def get_environment_info(ignore_tk: bool = False):
     """Collects and formats key environment details."""
     
@@ -273,12 +320,6 @@ def get_environment_info(ignore_tk: bool = False):
     except (ValueError, TypeError):
         system_locale = "Could not determine"
 
-    try:
-        version = get_version()
-    except Exception as e:
-        print(e)
-        version = "Unknown"
-
     import platform
     import sys
 
@@ -293,7 +334,7 @@ def get_environment_info(ignore_tk: bool = False):
 
     def _exe_dir() -> str | None:
         if "__compiled__" in globals() and hasattr(__compiled__, "containing_dir"):
-            return str(Path(__compiled__.containing_dir).resolve())
+            return str(EXE_DIR)
         return None
 
     lines: list[str] = []
@@ -301,7 +342,11 @@ def get_environment_info(ignore_tk: bool = False):
 
     # --- Available Languages ---
     lines.append("\n--- BA Modding Toolkit ---")
-    lines.append(f"Version:             {version}")
+    version_info = get_version_info()
+    lines.append(f"Version:             {version_info['version'] or 'N/A'}")
+    lines.append(f"Commit:              {version_info['commit_hash'] or 'N/A'}")
+    lines.append(f"Tag:                 {version_info['tag'] or 'N/A'}")
+    lines.append(f"Build Time:          {version_info['build_time'] or 'N/A'}")
     lines.append(f"Current Language:    {i18n_manager.lang}")
     lines.append(f"Available Languages: {', '.join(i18n_manager.get_available_languages())}")
 
@@ -323,515 +368,50 @@ def get_environment_info(ignore_tk: bool = False):
 
     # --- Library Versions ---
     lines.append("\n--- Library Versions ---")
-    lines.append(f"UnityPy Version:     {unitypy_version}")
-    lines.append(f"Pillow Version:      {pillow_version}")
-    lines.append(f"Tkinter Version:     {tk_version}")
-    lines.append(f"TkinterDnD2 Version: {tkinterdnd2_version}")
-    lines.append(f"ttkbootstrap Version:{tb_version}")
-    lines.append(f"toml Version:        {toml_version}")
-    lines.append(f"SpineAtlas Version:  {spineatlas_version}")
+    lines.append(f"UnityPy:             {unitypy_version}")
+    lines.append(f"Pillow:              {pillow_version}")
+    lines.append(f"Tkinter:             {tk_version}")
+    lines.append(f"TkinterDnD2:         {tkinterdnd2_version}")
+    lines.append(f"ttkbootstrap:        {tb_version}")
+    lines.append(f"toml:                {toml_version}")
+    lines.append(f"SpineAtlas:          {spineatlas_version}")
     
     lines.append("")
 
     return "\n".join(lines)
 
-class SpineUtils:
-    """Spine 资源转换工具类，支持版本升级和降级。"""
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
-    @staticmethod
-    def get_skel_version(source: Path | bytes, log: LogFunc = no_log) -> str | None:
-        """
-        通过扫描文件或字节数据头部来查找Spine版本号。
-
-        Args:
-            source: .skel 文件的 Path 对象或其字节数据 (bytes)。
-            log: 日志记录函数
-
-        Returns:
-            一个字符串，表示Spine的版本号，例如 "4.2.33"。
-            如果未找到，则返回 None。
-        """
+def timing(func: Callable[_P, _R]) -> Callable[_P, _R]:
+    """函数运行时间统计装饰器，结果直接 print 输出"""
+    @wraps(func)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        start = time.perf_counter()
         try:
-            data = b''
-            if isinstance(source, Path):
-                if not source.exists():
-                    log(t("log.file.not_exist", path=source))
-                    return None
-                with open(str(source), 'rb') as f:
-                    data = f.read(256)
-            else:
-                data = source
+            return func(*args, **kwargs)
+        finally:
+            print(f"[timing] {func.__qualname__}: {time.perf_counter() - start:.3f}s")
+    return wrapper
 
-            header_chunk = data[:256]
-            header_text = header_chunk.decode('utf-8', errors='ignore')
 
-            match = re.search(r'(\d\.\d+\.\d+)', header_text)
-            
-            if not match:
-                return None
-            
-            version_string = match.group(1)
-            return version_string
+def throttle_progress(callback: Callable[[int, int, str], None], interval: float = 0.1) -> Callable[[int, int, str], None]:
+    """为进度回调 (current, total, filename) 添加时间节流
 
-        except Exception as e:
-            log(t("log.error_processing", error=e))
-            return None
+    interval 秒内最多实际调用一次回调，最后一次（current >= total）必定调用，
+    用于避免海量文件的逐条 GUI 更新。
+    """
+    last = 0.0
 
-    @staticmethod
-    def run_skel_converter(
-        input_data: bytes | Path,
-        converter_path: Path,
-        target_version: str,
-        output_path: Path | None = None,
-        log: LogFunc = no_log,
-    ) -> tuple[bool, bytes]:
-        """
-        通用的 Spine .skel 文件转换器，支持升级和降级。
+    def throttled(current: int, total: int, filename: str) -> None:
+        nonlocal last
+        now = time.perf_counter()
+        if current >= total or now - last >= interval:
+            last = now
+            callback(current, total, filename)
 
-        Args:
-            input_data: 输入数据，可以是 bytes 或 Path 对象
-            converter_path: 转换器可执行文件的路径
-            target_version: 目标版本号 (例如 "4.2.33" 或 "3.8.75")
-            output_path: 可选的输出文件路径，如果提供则将结果保存到该路径
-            log: 日志记录函数
+    return throttled
 
-        Returns:
-            tuple[bool, bytes]: (是否成功, 转换后的数据)
-        """
-        original_bytes: bytes
-        if isinstance(input_data, Path):
-            try:
-                original_bytes = input_data.read_bytes()
-            except OSError as e:
-                log(f'  > ❌ {t("log.file.read_in_memory_failed", path=input_data, error=e)}')
-                return False, b""
-        else:
-            original_bytes = input_data
-
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_dir_path = Path(temp_dir)
-
-                temp_input_path = temp_dir_path / "input.skel"
-                temp_input_path.write_bytes(original_bytes)
-
-                current_version = SpineUtils.get_skel_version(temp_input_path, log)
-                if not current_version:
-                    log(f'  > ⚠️ {t("log.spine.skel_version_detection_failed")}')
-                    return False, original_bytes
-
-                temp_output_path = output_path if output_path else temp_dir_path / "output.skel"
-
-                command = [
-                    str(converter_path),
-                    str(temp_input_path),
-                    str(temp_output_path),
-                    "-v",
-                    target_version
-                ]
-
-                log(f'    > {t("log.spine.converting_skel", name=temp_input_path.name)}')
-                log(f'      > {t("log.spine.version_conversion", current=current_version, target=target_version)}')
-                log(f'      > {t("log.spine.executing_command", command=" ".join(command))}')
-
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding='utf-8',
-                    errors='ignore',
-                )
-
-                if result.returncode == 0:
-                    return True, temp_output_path.read_bytes()
-                else:
-                    log(f'      ✗ {t("log.spine.skel_conversion_failed")}:')
-                    log(f"        stdout: {result.stdout.strip()}")
-                    log(f"        stderr: {result.stderr.strip()}")
-                    return False, original_bytes
-
-        except Exception as e:
-            log(f'    ❌ {t("log.error_detail", error=e)}')
-            return False, original_bytes
-
-    @staticmethod
-    def handle_skel_upgrade(
-        skel_bytes: bytes,
-        resource_name: str,
-        enabled: bool = False,
-        converter_path: Path | None = None,
-        target_version: str | None = None,
-        log: LogFunc = no_log,
-    ) -> bytes:
-        """
-        处理 .skel 文件的版本检查和升级。
-        如果无需升级或升级失败，则返回原始字节。
-        """
-        if not enabled or not converter_path or not target_version:
-            return skel_bytes
-
-        if not converter_path.exists():
-            return skel_bytes
-
-        if target_version.count(".") != 2:
-            return skel_bytes
-
-        try:
-            log(f'  > {t("log.spine.skel_detected", name=resource_name)}')
-            current_version = SpineUtils.get_skel_version(skel_bytes, log)
-            target_major_minor = ".".join(target_version.split('.')[:2])
-
-            if current_version and not current_version.startswith(target_major_minor):
-                log(f'    > {t("log.spine.version_mismatch_converting", current=current_version, target=target_version)}')
-
-                skel_success, upgraded_content = SpineUtils.run_skel_converter(
-                    input_data=skel_bytes,
-                    converter_path=converter_path,
-                    target_version=target_version,
-                    log=log
-                )
-                if skel_success:
-                    log(f'  > {t("log.spine.skel_conversion_success")}')
-                    return upgraded_content
-                else:
-                    log(f'  ❌ {t("log.spine.skel_conversion_failed")}')
-
-        except Exception as e:
-            log(f'    ❌ {t("log.error_detail", error=e)}')
-
-        return skel_bytes
-
-    @staticmethod
-    def process_skel_downgrade(
-        skel_path: Path,
-        output_dir: Path,
-        converter_path: Path,
-        target_version: str,
-        log: LogFunc = no_log,
-    ) -> bool:
-        """处理单个 .skel 文件的降级。"""
-        version = SpineUtils.get_skel_version(skel_path, log)
-        log(f"    > {t('log.spine.version_detected_downgrading', version=version or t('common.unknown'))}")
-        
-        output_skel_path = output_dir / skel_path.name
-        skel_success, _ = SpineUtils.run_skel_converter(
-            input_data=skel_path,
-            converter_path=converter_path,
-            target_version=target_version,
-            output_path=output_skel_path,
-            log=log
-        )
-        if skel_success:
-            log(f'    > {t("log.spine.skel_conversion_success", name=skel_path.name)}')
-        else:
-            log(f'    ✗ {t("log.spine.skel_conversion_failed")}')
-        return skel_success
-
-    @staticmethod
-    def process_atlas_downgrade(
-        atlas_path: Path,
-        output_dir: Path,
-        log: LogFunc = no_log,
-    ) -> bool:
-        """使用 SpineAtlas 转换图集数据为 Spine 3 格式。"""
-        from SpineAtlas import Atlas, ReadAtlasFile
-        try:
-            log(f'    > {t("log.spine.converting_atlas", name=atlas_path.name)}')
-            
-            atlas: Atlas = ReadAtlasFile(str(atlas_path))
-            atlas.version = False
-            
-            atlas.ReScale()
-            atlas.SaveAtlas4_0Scale(outPath=output_dir)
-            log(f'    > {t("log.spine.atlas_downgrade_success")}')
-            return True
-        except Exception as e:
-            log(f'    ✗ {t("log.error_detail", error=e)}')
-            return False
-
-    @staticmethod
-    def unpack_atlas_frames(
-        atlas_path: Path,
-        output_dir: Path,
-        log: LogFunc = no_log,
-    ) -> bool:
-        """将 atlas 文件解包为单独的 PNG 帧图片。"""
-        from SpineAtlas import ReadAtlasFile
-        try:
-            log(f'    > {t("log.spine.unpacking_atlas", name=atlas_path.name)}')
-            
-            atlas = ReadAtlasFile(str(atlas_path))
-            atlas.ReScale()
-            frames_output_dir = output_dir / "images"
-            frames_output_dir.mkdir(parents=True, exist_ok=True)
-            
-            atlas.SaveFrames(path=str(frames_output_dir), mode='Normal')
-            
-            log(f'    > {t("log.spine.atlas_unpack_success", path=frames_output_dir)}')
-            return True
-        except Exception as e:
-            log(f'    ✗ {t("log.spine.atlas_unpack_failed")}: {e}')
-            return False
-
-
-    @staticmethod
-    def query_spine_info(
-        skel_path: Path,
-        viewer_path: Path,
-        atlas_path: Path | None = None,
-        log: LogFunc = no_log,
-    ) -> tuple[bool, dict]:
-        """
-        查询 Spine skel 文件中的动画和皮肤信息。
-
-        Args:
-            skel_path: skel 文件路径
-            viewer_path: SpineViewerCLI 可执行文件路径
-            atlas_path: atlas 文件路径（可选）
-            log: 日志记录函数
-
-        Returns:
-            tuple[bool, dict]: (是否成功, 包含 animations 和 skins 的字典)
-        """
-        if not skel_path.exists():
-            log(f'  ❌ {t("log.file.not_exist", path=skel_path)}')
-            return False, {}
-
-        if not viewer_path.exists():
-            log(f'  ❌ {t("log.file.not_exist", path=viewer_path)}')
-            return False, {}
-
-        try:
-            command = [
-                str(viewer_path),
-                "query",
-                "--all",
-                str(skel_path)
-            ]
-
-            if atlas_path and atlas_path.exists():
-                command.extend(["--atlas", str(atlas_path)])
-
-            log(f'  > {t("log.spine.querying_info", name=skel_path.name)}')
-
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='ignore',
-            )
-
-            if result.returncode != 0:
-                log(f'  ✗ {t("log.spine.query_failed")}: {result.stderr.strip()}')
-                return False, {}
-
-            # 解析输出
-            info = {
-                'animations': [],
-                'skins': []
-            }
-
-            lines = result.stdout.strip().split('\n')
-            current_section = None
-
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-
-                # 检测区块开始标记
-                if '>>>>>>>>>>>>>>> Animations >>>>>>>>>>>>>>>' in line:
-                    current_section = 'animations'
-                    continue
-                elif '>>>>>>>>>>>>>>> Skins >>>>>>>>>>>>>>>' in line:
-                    current_section = 'skins'
-                    continue
-                # 检测区块结束标记
-                elif '<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<' in line:
-                    current_section = None
-                    continue
-                # 跳过表头
-                elif current_section and ('Name' in line or 'Duration' in line):
-                    continue
-                # 解析数据行
-                elif current_section:
-                    # Animations 格式: "Name    Duration"
-                    # Skins 格式: "Name"
-                    parts = line.split()
-                    if parts:
-                        # 提取名称（第一列）
-                        name = parts[0]
-                        if name and name not in ['Name', 'Duration']:
-                            info[current_section].append(name)
-
-            log(f'  > {t("log.spine.query_success", anim_count=len(info["animations"]), skin_count=len(info["skins"]))}')
-            return True, info
-
-        except Exception as e:
-            log(f'  ❌ {t("log.error_detail", error=e)}')
-            return False, {}
-
-    @staticmethod
-    def render_spine_preview(
-        skel_path: Path,
-        output_path: Path,
-        viewer_path: Path,
-        atlas_path: Path | None = None,
-        animation: str = "Idle_01",
-        skin: str = "",
-        scale: float = 1.0,
-        background: str = "#00000000",
-        fmt: str = "png",
-        log: LogFunc = no_log,
-    ) -> tuple[bool, str]:
-        """
-        渲染 Spine 预览图。
-
-        Args:
-            skel_path: skel 文件路径
-            output_path: 输出图片路径
-            viewer_path: SpineViewerCLI 可执行文件路径
-            animation: 动画名称
-            skin: 皮肤名称（空字符串表示默认皮肤）
-            atlas_path: atlas 文件路径（可选）
-            scale: 缩放比例
-            background: 背景颜色（默认透明）
-            fmt: 输出格式
-            log: 日志记录函数
-
-        Returns:
-            tuple[bool, str]: (是否成功, 状态消息)
-        """
-        if not skel_path.exists():
-            msg = t("log.file.not_exist", path=skel_path)
-            log(f'  ❌ {msg}')
-            return False, msg
-
-        if not viewer_path.exists():
-            msg = t("log.file.not_exist", path=viewer_path)
-            log(f'  ❌ {msg}')
-            return False, msg
-
-        try:
-            command = [
-                str(viewer_path),
-                "export",
-                str(skel_path),
-                "-f", fmt,
-                "-o", str(output_path),
-                "-a", animation,
-                "--scale", str(scale),
-                "--color", background,
-                "--margin", "0",
-                "--max-resolution", "8888",
-                "--time", "0",
-                "--quality", "100",
-                "--no-progress"
-            ]
-
-            if skin:
-                command.extend(["--skins", skin])
-
-            if atlas_path and atlas_path.exists():
-                command.extend(["--atlas", str(atlas_path)])
-
-            log(f'  > {t("log.spine.rendering_preview", name=skel_path.name, anim=animation)}')
-
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='ignore',
-            )
-
-            if result.returncode != 0:
-                msg = t("log.spine.render_failed", error=result.stderr.strip())
-                log(f'  ✗ {msg}')
-                return False, msg
-
-            if output_path.exists():
-                msg = t("log.spine.render_success", path=output_path)
-                log(f'  ✓ {msg}')
-                return True, msg
-            else:
-                msg = t("log.spine.render_file_not_found")
-                log(f'  ✗ {msg}')
-                return False, msg
-
-        except Exception as e:
-            msg = t("log.error_detail", error=e)
-            log(f'  ❌ {msg}')
-            return False, msg
-
-    @staticmethod
-    def normalize_legacy_spine_assets(source_folder_path: Path, log: LogFunc = no_log) -> Path:
-        """
-        修正旧版 Spine 3.8 文件名格式
-        将类似 CH0808_home2.png 的文件重命名为 CH0808_home_2.png
-        并更新 .atlas 文件中的引用
-        此函数创建一个临时目录，复制所有文件并在其中进行重命名，不修改用户原始文件。
-
-        Returns:
-            临时目录路径，包含修正后的文件
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir_path = Path(temp_dir)
-
-            filename_mapping: dict[str, str] = {}
-
-            for source_file in source_folder_path.iterdir():
-                if not source_file.is_file():
-                    continue
-
-                dest_file = temp_dir_path / source_file.name
-
-                if source_file.suffix.lower() == '.png':
-                    old_name = source_file.stem
-                    new_name = old_name
-
-                    # TODO: 修复 [CH0144.png] -> [CH014_4.png]
-                    match = re.search(r'^(.*)(\d+)$', old_name)
-                    if match:
-                        prefix = match.group(1)
-                        number = match.group(2)
-                        new_name = f"{prefix}_{number}"
-
-                    if new_name != old_name:
-                        old_filename = source_file.name
-                        new_filename = f"{new_name}.png"
-                        dest_file = temp_dir_path / new_filename
-                        filename_mapping[old_filename] = new_filename
-                        log(f"  - {t('log.file.rename', old=old_filename, new=new_filename)}")
-
-                shutil.copy2(source_file, dest_file)
-
-            for atlas_file in temp_dir_path.glob('*.atlas'):
-                try:
-                    content = atlas_file.read_text(encoding='utf-8')
-                    modified = False
-
-                    for old_name, new_name in filename_mapping.items():
-                        if old_name in content:
-                            content = content.replace(old_name, new_name)
-                            modified = True
-
-                    if modified:
-                        atlas_file.write_text(content, encoding='utf-8')
-                        log(f"  - {t('log.spine.edit_atlas', filename=atlas_file.name)}")
-
-                except Exception as e:
-                    log(f"  ❌ {t('log.error_detail', error=e)}")
-
-            final_temp_dir = tempfile.mkdtemp(prefix="spine38_fix_")
-            final_temp_path = Path(final_temp_dir)
-
-            for item in temp_dir_path.iterdir():
-                if item.is_file():
-                    shutil.copy2(item, final_temp_path / item.name)
-
-            return final_temp_path
 
 class ImageUtils:
     @staticmethod
